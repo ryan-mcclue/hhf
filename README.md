@@ -14,8 +14,9 @@ sh misc/build
 ```
 
 ## Packaging
+[Debian Package Repo](https://github.com/ryan-mcclue/hhf-deb)
 ```
-sudo add-apt-repository ppa:ryan-mcclue/master
+sudo add-apt-repository ppa:ryan-mcclue/personal
 sudo apt update
 sudo apt install hhf
 ```
