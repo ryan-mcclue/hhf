@@ -178,9 +178,9 @@ main(int argc, char *argv[])
       {
         case ConfigureNotify:
         {
-          // TODO(Ryan): Restrict to particular resolutions that align with our art
           xlib_image_width = xlib_event.xconfigure.width;
           xlib_image_height = xlib_event.xconfigure.height;
+          // TODO(Ryan): Restrict to particular resolutions that align with our art
           xlib_resize_image(xlib_image_width, xlib_image_height);
         } break;
       }
