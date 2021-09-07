@@ -7,14 +7,21 @@
 #include <string_view>
 #include <cstdio>
 #include <cstring>
+#include <cerrno>
+#include <cstdlib>
 
 #define INTERNAL static
+#define GLOBAL static
+#define LOCAL_PERSIST static
 
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
+INTERNAL void __ebp(void) { __attribute__((unused)) char *err = strerror(errno); }
 #define BP() __bp()
+#define EBP() __ebp()
 #else
 #define BP()
+#define EBP()
 #endif
 
 INTERNAL int
@@ -93,11 +100,23 @@ main(int argc, char *argv[])
   int xlib_window_name_property_granularity = 8;
   XChangeProperty(xlib_display, xlib_window, XA_WM_NAME, XA_STRING, 
       xlib_window_name_property_granularity, PropModeReplace, 
-      reinterpret_cast<const unsigned char *>(xlib_window_name.data()), 
+      (const unsigned char *)xlib_window_name.data(), 
       xlib_window_name.length());
 
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
+
+  int bytes_per_pixel = 4;
+  int back_buffer_width = 1280;
+  int back_buffer_height = 720;
+  char *back_buffer = (char *)calloc(back_buffer_width * back_buffer_height, bytes_per_pixel);
+  // back buffer is kept at the same size as the window
+  if (back_buffer == NULL)
+  {
+    // TODO(Ryan): Error logging
+    EBP();
+  }
+  //XImage *xlib_image = XCreateImage(xlib_display, );
 
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
   if (xlib_wm_delete_atom == None) 
@@ -114,7 +133,7 @@ main(int argc, char *argv[])
   int xlib_window_protocols_property_granularity = 32;
   XChangeProperty(xlib_display, xlib_window, xlib_wm_atom, XA_ATOM, 
       xlib_window_protocols_property_granularity, PropModeReplace, 
-      reinterpret_cast<unsigned char *>(&xlib_wm_delete_atom), 1);
+      (unsigned char *)&xlib_wm_delete_atom, 1);
 
   bool want_to_run = true;
   while (want_to_run)
@@ -126,6 +145,7 @@ main(int argc, char *argv[])
       {
         case ConfigureNotify:
         {
+          // TODO(Ryan): Restrict to particular resolutions that align with our art
           printf("window width: %d\n", xlib_event.xconfigure.width);
           printf("window height: %d\n", xlib_event.xconfigure.height);
         } break;
@@ -134,7 +154,7 @@ main(int argc, char *argv[])
     
     while (XCheckTypedWindowEvent(xlib_display, xlib_window, ClientMessage, &xlib_event))
     {
-      if (xlib_event.xclient.data.l[0] == static_cast<long>(xlib_wm_delete_atom))
+      if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
       {
         XDestroyWindow(xlib_display, xlib_window);
         want_to_run = false;
