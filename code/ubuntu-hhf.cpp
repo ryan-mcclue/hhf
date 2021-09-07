@@ -14,6 +14,10 @@
 #define GLOBAL static
 #define LOCAL_PERSIST static
 
+GLOBAL Display *xlib_display;
+GLOBAL XVisualInfo xlib_visual_info;
+GLOBAL XImage *xlib_image;
+
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
 INTERNAL void __ebp(void) { __attribute__((unused)) char *err = strerror(errno); }
@@ -53,10 +57,46 @@ xlib_io_error_handler(Display *display)
   return 1;
 }
 
+INTERNAL void
+xlib_resize_image(int width, int height)
+{
+  if (xlib_image != NULL)
+  {
+    XDestroyImage(xlib_image);
+  }
+
+  int bytes_per_pixel = 4;
+  char *back_buffer = (char *)calloc(width * height, bytes_per_pixel);
+  if (back_buffer == NULL)
+  {
+    // TODO(Ryan): Error logging
+    EBP();
+  }
+
+  int xlib_image_offset = 0;
+  int xlib_image_scanline_offset = 0;
+  int xlib_image_pad_bits = 32;
+  xlib_image = XCreateImage(xlib_display, xlib_visual_info.visual, xlib_visual_info.depth,
+                            ZPixmap, xlib_image_offset, back_buffer, width, height,
+                            xlib_image_pad_bits, xlib_image_scanline_offset);
+  if (xlib_image == NULL)
+  {
+    // TODO(Ryan): Error logging
+    BP();
+  }
+}
+
+INTERNAL void
+xlib_display_image(GC gc, Window window, int x0, int y0, int width, int height)
+{
+  XPutImage(xlib_display, window, gc, xlib_image,
+      x0, y0, x0, y0, width, height); 
+}
+
 int
 main(int argc, char *argv[])
 {
-  Display *xlib_display = XOpenDisplay(NULL);
+  xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL)
   {
     // TODO(Ryan): Error logging
@@ -68,7 +108,6 @@ main(int argc, char *argv[])
 
   int xlib_screen = XDefaultScreen(xlib_display);
   int xlib_desired_screen_depth = 24;
-  XVisualInfo xlib_visual_info = {};
   Status xlib_visual_info_status = XMatchVisualInfo(xlib_display, xlib_screen, 
                                                     xlib_desired_screen_depth, TrueColor,
                                                     &xlib_visual_info);
@@ -106,17 +145,7 @@ main(int argc, char *argv[])
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
-  int bytes_per_pixel = 4;
-  int back_buffer_width = 1280;
-  int back_buffer_height = 720;
-  char *back_buffer = (char *)calloc(back_buffer_width * back_buffer_height, bytes_per_pixel);
-  // back buffer is kept at the same size as the window
-  if (back_buffer == NULL)
-  {
-    // TODO(Ryan): Error logging
-    EBP();
-  }
-  //XImage *xlib_image = XCreateImage(xlib_display, );
+  GC xlib_gc = XDefaultGC(xlib_display, xlib_screen);
 
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
   if (xlib_wm_delete_atom == None) 
@@ -135,6 +164,10 @@ main(int argc, char *argv[])
       xlib_window_protocols_property_granularity, PropModeReplace, 
       (unsigned char *)&xlib_wm_delete_atom, 1);
 
+  int xlib_image_width = xlib_window_x1 - xlib_window_x0;
+  int xlib_image_height = xlib_window_y1 - xlib_window_y0;
+  xlib_resize_image(xlib_image_width, xlib_image_height);
+
   bool want_to_run = true;
   while (want_to_run)
   {
@@ -146,8 +179,9 @@ main(int argc, char *argv[])
         case ConfigureNotify:
         {
           // TODO(Ryan): Restrict to particular resolutions that align with our art
-          printf("window width: %d\n", xlib_event.xconfigure.width);
-          printf("window height: %d\n", xlib_event.xconfigure.height);
+          xlib_image_width = xlib_event.xconfigure.width;
+          xlib_image_height = xlib_event.xconfigure.height;
+          xlib_resize_image(xlib_image_width, xlib_image_height);
         } break;
       }
     }
@@ -161,6 +195,8 @@ main(int argc, char *argv[])
         break;
       }
     }
+
+    xlib_display_image(xlib_gc, xlib_window, 0, 0, xlib_image_width, xlib_image_height);
   }
 
   return 0;
