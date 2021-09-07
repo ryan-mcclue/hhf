@@ -66,6 +66,8 @@ xlib_resize_image(int width, int height)
   }
 
   int bytes_per_pixel = 4;
+  // IMPORTANT(Ryan): Would like to use mmap() for page-aligned return and memory 
+  // commit/protection options, however XDestroyImage() expects memory to be allocated with stdlib
   char *back_buffer = (char *)calloc(width * height, bytes_per_pixel);
   if (back_buffer == NULL)
   {
