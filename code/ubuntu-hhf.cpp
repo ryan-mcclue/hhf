@@ -9,14 +9,19 @@
 #include <cstring>
 #include <cerrno>
 #include <cstdlib>
+#include <cstdint>
 
 #define INTERNAL static
 #define GLOBAL static
 #define LOCAL_PERSIST static
 
+typedef uint8_t u8;
+typedef uint32_t u32;
+
 GLOBAL Display *xlib_display;
 GLOBAL XVisualInfo xlib_visual_info;
 GLOBAL XImage *xlib_image;
+GLOBAL u8 *back_buffer;
 
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
@@ -68,7 +73,7 @@ xlib_resize_image(int width, int height)
   int bytes_per_pixel = 4;
   // IMPORTANT(Ryan): Would like to use mmap() for page-aligned return and memory 
   // commit/protection options, however XDestroyImage() expects memory to be allocated with stdlib
-  char *back_buffer = (char *)calloc(width * height, bytes_per_pixel);
+  back_buffer = (u8 *)calloc(width * height, bytes_per_pixel);
   if (back_buffer == NULL)
   {
     // TODO(Ryan): Error logging
@@ -79,7 +84,7 @@ xlib_resize_image(int width, int height)
   int xlib_image_scanline_offset = 0;
   int xlib_image_pad_bits = 32;
   xlib_image = XCreateImage(xlib_display, xlib_visual_info.visual, xlib_visual_info.depth,
-                            ZPixmap, xlib_image_offset, back_buffer, width, height,
+                            ZPixmap, xlib_image_offset, (char *)back_buffer, width, height,
                             xlib_image_pad_bits, xlib_image_scanline_offset);
   if (xlib_image == NULL)
   {
@@ -89,10 +94,10 @@ xlib_resize_image(int width, int height)
 }
 
 INTERNAL void
-xlib_display_image(GC gc, Window window, int x0, int y0, int width, int height)
+xlib_display_image(GC gc, Window window)
 {
   XPutImage(xlib_display, window, gc, xlib_image,
-      x0, y0, x0, y0, width, height); 
+      0, 0, 0, 0, xlib_image->width, xlib_image->height); 
 }
 
 int
@@ -180,10 +185,16 @@ main(int argc, char *argv[])
       {
         case ConfigureNotify:
         {
-          xlib_image_width = xlib_event.xconfigure.width;
-          xlib_image_height = xlib_event.xconfigure.height;
-          // TODO(Ryan): Restrict to particular resolutions that align with our art
-          xlib_resize_image(xlib_image_width, xlib_image_height);
+          int cur_window_width = xlib_event.xconfigure.width;
+          int cur_window_height = xlib_event.xconfigure.height;
+          if (xlib_image_width != cur_window_width ||
+              xlib_image_height != cur_window_height)
+          {
+            xlib_image_width = cur_window_width;
+            xlib_image_height = cur_window_height;
+            // TODO(Ryan): Restrict to particular resolutions that align with our art
+            xlib_resize_image(xlib_image_width, xlib_image_height);
+          }
         } break;
       }
     }
@@ -198,7 +209,23 @@ main(int argc, char *argv[])
       }
     }
 
-    xlib_display_image(xlib_gc, xlib_window, 0, 0, xlib_image_width, xlib_image_height);
+    xlib_display_image(xlib_gc, xlib_window);
+
+    u32 *pixel = (u32 *)back_buffer;
+    for (int back_buffer_y = 0; 
+         back_buffer_y < xlib_image->height;
+         ++back_buffer_y)
+    {
+      for (int back_buffer_x = 0; 
+          back_buffer_x < xlib_image->width;
+          ++back_buffer_x)
+      {
+        u8 red = (u8)back_buffer_x;
+        u8 green = (u8)back_buffer_y;
+        u8 blue = 0x33;
+        *pixel++ = red << 16 | green << 8 | blue;
+      }
+    }
   }
 
   return 0;
