@@ -3,10 +3,13 @@
 
 test ! -d build && mkdir build
 
-common_flags='-fno-exceptions -fno-rtti -std=c++2a'
-dev_flags='-g -Wall -DHHF_DEV'
+intel_vtune="$HOME/intel/oneapi/vtune/2021.6.0/sdk"
+intel_vtune_flags="-I ${intel_vtune}/include -L ${intel_vtune}/lib64"
 
-libraries='-lX11'
+common_flags='-fno-exceptions -fno-rtti -std=c++2a'
+dev_flags="-g -Wall -DHHF_DEV"
+
+libraries="-lX11"
 
 g++ $common_flags $dev_flags \
   code/ubuntu-hhf.cpp -o build/ubuntu-hhf \

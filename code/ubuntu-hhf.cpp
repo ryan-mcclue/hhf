@@ -100,6 +100,26 @@ xlib_display_image(GC gc, Window window)
       0, 0, 0, 0, xlib_image->width, xlib_image->height); 
 }
 
+INTERNAL void
+render_weird_gradient(int x_offset, int y_offset)
+{
+  u32 *pixel = (u32 *)back_buffer;
+  for (int back_buffer_y = 0; 
+        back_buffer_y < xlib_image->height;
+        ++back_buffer_y)
+  {
+    for (int back_buffer_x = 0; 
+        back_buffer_x < xlib_image->width;
+        ++back_buffer_x)
+    {
+      u8 red = back_buffer_x + x_offset;
+      u8 green = back_buffer_y + y_offset;
+      u8 blue = 0x33;
+      *pixel++ = red << 16 | green << 8 | blue;
+    }
+  }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -176,6 +196,7 @@ main(int argc, char *argv[])
   xlib_resize_image(xlib_image_width, xlib_image_height);
 
   bool want_to_run = true;
+  int x_offset = 0;
   while (want_to_run)
   {
     XEvent xlib_event = {};
@@ -209,23 +230,10 @@ main(int argc, char *argv[])
       }
     }
 
-    xlib_display_image(xlib_gc, xlib_window);
+    render_weird_gradient(x_offset, 0);
+    x_offset++;
 
-    u32 *pixel = (u32 *)back_buffer;
-    for (int back_buffer_y = 0; 
-         back_buffer_y < xlib_image->height;
-         ++back_buffer_y)
-    {
-      for (int back_buffer_x = 0; 
-          back_buffer_x < xlib_image->width;
-          ++back_buffer_x)
-      {
-        u8 red = (u8)back_buffer_x;
-        u8 green = (u8)back_buffer_y;
-        u8 blue = 0x33;
-        *pixel++ = red << 16 | green << 8 | blue;
-      }
-    }
+    xlib_display_image(xlib_gc, xlib_window);
   }
 
   return 0;
