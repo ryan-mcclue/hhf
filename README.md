@@ -16,9 +16,14 @@ sh misc/build
 ## Packaging
 [Debian Package Repo](https://github.com/ryan-mcclue/hhf-deb)
 ```
+# Install
 sudo add-apt-repository ppa:ryan-mcclue/personal
 sudo apt update
 sudo apt install hhf
+
+# Update
+sudo apt list --upgradeable | grep hhf
+sudo apt --only-upgrade install hhf
 ```
 
 ## Attributions
