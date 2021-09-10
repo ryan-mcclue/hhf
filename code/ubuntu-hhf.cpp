@@ -18,10 +18,16 @@
 typedef uint8_t u8;
 typedef uint32_t u32;
 
-GLOBAL Display *xlib_display;
+struct XlibBackBuffer
+{
+  XImage *image;
+  u8 *memory;
+  int width;
+  int height;
+};
+
+Display *xlib_display;
 GLOBAL XVisualInfo xlib_visual_info;
-GLOBAL XImage *xlib_image;
-GLOBAL u8 *back_buffer;
 
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
@@ -63,11 +69,12 @@ xlib_io_error_handler(Display *display)
 }
 
 INTERNAL void
-xlib_resize_image(int width, int height)
+xlib_resize_image(XlibBackBuffer back_buffer, int width, int height)
 {
-  if (xlib_image != NULL)
+  // TODO(Ryan): See what optimiser does
+  if (back_buffer.image != NULL)
   {
-    XDestroyImage(xlib_image);
+    XDestroyImage(back_buffer.image);
   }
 
   int bytes_per_pixel = 4;
@@ -101,15 +108,15 @@ xlib_display_image(GC gc, Window window)
 }
 
 INTERNAL void
-render_weird_gradient(int x_offset, int y_offset)
+render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
 {
-  u32 *pixel = (u32 *)back_buffer;
+  u32 *pixel = (u32 *)back_buffer->pixels;
   for (int back_buffer_y = 0; 
-        back_buffer_y < xlib_image->height;
+        back_buffer_y < back_buffer->height;
         ++back_buffer_y)
   {
     for (int back_buffer_x = 0; 
-        back_buffer_x < xlib_image->width;
+        back_buffer_x < back_buffer->width;
         ++back_buffer_x)
     {
       u8 red = back_buffer_x + x_offset;
