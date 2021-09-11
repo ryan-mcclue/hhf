@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: zlib-acknowledgement 
 
+#include <sys/mman.h>
+
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -77,7 +79,10 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
   XlibBackBuffer back_buffer = {};
 
   int bytes_per_pixel = 4;
-  back_buffer.memory = (u8 *)mmap(width * height, bytes_per_pixel);
+  int fd = -1;
+  int offset = 0;
+  back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
+                                  PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, fd, offset);
   if (back_buffer.memory == NULL)
   {
     // TODO(Ryan): Error logging
@@ -105,7 +110,7 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
 
 INTERNAL void
 xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
-                         GC gc, XlibBackBuffer back_buffer)
+                         GC gc, XlibBackBuffer back_buffer, int window_width, int window_height)
 {
   XPutImage(display, back_buffer.pixmap, gc, back_buffer.image, 
           0, 0, 0, 0, back_buffer.width, back_buffer.height);
@@ -118,15 +123,7 @@ xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window win
                                           format, 0, 
                                           &pict_attributes);
   
-  Window __root_window = 0;
-  int __x0 = 0, __y0 = 0;
-  unsigned int __border = 0, __depth = 0;
-  unsigned int window_width = 0, window_height = 0;
-  if (XGetGeometry(display, window, &__root_window, &__x0, &__y0, &window_width, &window_height, 
-                   &__border, &__depth) == False)
-  {
-    BP();
-  }
+  // TODO(Ryan): Restrict to particular resolutions that align with our art
   double x_scale = back_buffer.width / window_width;
   double y_scale = back_buffer.height / window_height;
   XTransform transform_matrix = {{
@@ -232,9 +229,13 @@ main(int argc, char *argv[])
       xlib_window_protocols_property_granularity, PropModeReplace, 
       (unsigned char *)&xlib_wm_delete_atom, 1);
 
+  XRenderPictFormat *xrender_pic_format = XRenderFindVisualFormat(xlib_display, 
+                                                               xlib_visual_info.visual);
+
+  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
+  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
-
   bool want_to_run = true;
   int x_offset = 0;
   while (want_to_run)
@@ -246,16 +247,8 @@ main(int argc, char *argv[])
       {
         case ConfigureNotify:
         {
-          int cur_window_width = xlib_event.xconfigure.width;
-          int cur_window_height = xlib_event.xconfigure.height;
-          if (xlib_image_width != cur_window_width ||
-              xlib_image_height != cur_window_height)
-          {
-            xlib_image_width = cur_window_width;
-            xlib_image_height = cur_window_height;
-            // TODO(Ryan): Restrict to particular resolutions that align with our art
-            xlib_resize_image(xlib_image_width, xlib_image_height);
-          }
+          xlib_window_width = xlib_event.xconfigure.width;
+          xlib_window_height = xlib_event.xconfigure.height;
         } break;
       }
     }
@@ -273,8 +266,9 @@ main(int argc, char *argv[])
     render_weird_gradient(xlib_back_buffer, x_offset, 0);
     x_offset++;
 
-    xlib_display_back_buffer(xlib_display, xrender_pict_format, xlib_window,
-                             xlib_gc, xlib_back_buffer);
+    xlib_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
+                             xlib_gc, xlib_back_buffer, xlib_window_width, 
+                             xlib_window_height);
   }
 
   return 0;
