@@ -25,13 +25,11 @@ struct XlibBackBuffer
 {
   XImage *image;
   Pixmap pixmap;
+  // NOTE(Ryan): Memory order: XX RR GG BB
   u8 *memory;
   int width;
   int height;
 };
-
-Display *xlib_display;
-GLOBAL XVisualInfo xlib_visual_info;
 
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
@@ -163,7 +161,7 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
 int
 main(int argc, char *argv[])
 {
-  xlib_display = XOpenDisplay(NULL);
+  Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL)
   {
     // TODO(Ryan): Error logging
@@ -175,6 +173,7 @@ main(int argc, char *argv[])
 
   int xlib_screen = XDefaultScreen(xlib_display);
   int xlib_desired_screen_depth = 24;
+  XVisualInfo xlib_visual_info = {};
   Status xlib_visual_info_status = XMatchVisualInfo(xlib_display, xlib_screen, 
                                                     xlib_desired_screen_depth, TrueColor,
                                                     &xlib_visual_info);
@@ -238,6 +237,7 @@ main(int argc, char *argv[])
   int xlib_window_height = xlib_window_y1 - xlib_window_y0;
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
+  
   bool want_to_run = true;
   int x_offset = 0;
   while (want_to_run)
