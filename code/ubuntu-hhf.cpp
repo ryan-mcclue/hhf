@@ -3,6 +3,7 @@
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
+#include <X11/extensions/Xrender.h>
 
 #include <string_view>
 #include <cstdio>
@@ -21,6 +22,7 @@ typedef uint32_t u32;
 struct XlibBackBuffer
 {
   XImage *image;
+  Pixmap pixmap;
   u8 *memory;
   int width;
   int height;
@@ -68,55 +70,87 @@ xlib_io_error_handler(Display *display)
   return 1;
 }
 
-INTERNAL void
-xlib_resize_image(XlibBackBuffer back_buffer, int width, int height)
+INTERNAL XlibBackBuffer
+xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info, 
+                        int width, int height)
 {
-  // TODO(Ryan): See what optimiser does
-  if (back_buffer.image != NULL)
-  {
-    XDestroyImage(back_buffer.image);
-  }
+  XlibBackBuffer back_buffer = {};
 
   int bytes_per_pixel = 4;
-  // IMPORTANT(Ryan): Would like to use mmap() for page-aligned return and memory 
-  // commit/protection options, however XDestroyImage() expects memory to be allocated with stdlib
-  back_buffer = (u8 *)calloc(width * height, bytes_per_pixel);
-  if (back_buffer == NULL)
+  back_buffer.memory = (u8 *)mmap(width * height, bytes_per_pixel);
+  if (back_buffer.memory == NULL)
   {
     // TODO(Ryan): Error logging
     EBP();
   }
 
-  int xlib_image_offset = 0;
-  int xlib_image_scanline_offset = 0;
-  int xlib_image_pad_bits = 32;
-  xlib_image = XCreateImage(xlib_display, xlib_visual_info.visual, xlib_visual_info.depth,
-                            ZPixmap, xlib_image_offset, (char *)back_buffer, width, height,
-                            xlib_image_pad_bits, xlib_image_scanline_offset);
-  if (xlib_image == NULL)
+  int image_offset = 0;
+  int image_scanline_offset = 0;
+  int image_pad_bits = 32;
+  back_buffer.image = XCreateImage(display, visual_info.visual, visual_info.depth,
+                            ZPixmap, image_offset, (char *)back_buffer.memory, width, height,
+                            image_pad_bits, image_scanline_offset);
+  if (back_buffer.image == NULL)
   {
     // TODO(Ryan): Error logging
     BP();
   }
+
+  back_buffer.pixmap = XCreatePixmap(display, window,
+                                          back_buffer.width, back_buffer.height,
+                                          visual_info.depth);
+
+  return back_buffer;
 }
 
 INTERNAL void
-xlib_display_image(GC gc, Window window)
+xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
+                         GC gc, XlibBackBuffer back_buffer)
 {
-  XPutImage(xlib_display, window, gc, xlib_image,
-      0, 0, 0, 0, xlib_image->width, xlib_image->height); 
+  XPutImage(display, back_buffer.pixmap, gc, back_buffer.image, 
+          0, 0, 0, 0, back_buffer.width, back_buffer.height);
+  
+  XRenderPictureAttributes pict_attributes = {};
+  Picture src_pict = XRenderCreatePicture(display, back_buffer.pixmap, 
+                                          format, 0, 
+                                          &pict_attributes);
+  Picture dst_pict = XRenderCreatePicture(display, window, 
+                                          format, 0, 
+                                          &pict_attributes);
+  
+  Window __root_window = 0;
+  int __x0 = 0, __y0 = 0;
+  unsigned int __border = 0, __depth = 0;
+  unsigned int window_width = 0, window_height = 0;
+  if (XGetGeometry(display, window, &__root_window, &__x0, &__y0, &window_width, &window_height, 
+                   &__border, &__depth) == False)
+  {
+    BP();
+  }
+  double x_scale = back_buffer.width / window_width;
+  double y_scale = back_buffer.height / window_height;
+  XTransform transform_matrix = {{
+    {XDoubleToFixed(x_scale), XDoubleToFixed(0), XDoubleToFixed(0)},
+    {XDoubleToFixed(0), XDoubleToFixed(y_scale), XDoubleToFixed(0)},
+    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1.0)}  
+  }};
+  XRenderSetPictureTransform(display, src_pict, &transform_matrix);
+  
+  XRenderComposite(display, PictOpSrc, src_pict, 0, dst_pict, 
+                  0, 0, 0, 0, 0, 0,
+                  window_width, window_height);
 }
 
 INTERNAL void
 render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
 {
-  u32 *pixel = (u32 *)back_buffer->pixels;
+  u32 *pixel = (u32 *)back_buffer.memory;
   for (int back_buffer_y = 0; 
-        back_buffer_y < back_buffer->height;
+        back_buffer_y < back_buffer.height;
         ++back_buffer_y)
   {
     for (int back_buffer_x = 0; 
-        back_buffer_x < back_buffer->width;
+        back_buffer_x < back_buffer.width;
         ++back_buffer_x)
     {
       u8 red = back_buffer_x + x_offset;
@@ -198,9 +232,8 @@ main(int argc, char *argv[])
       xlib_window_protocols_property_granularity, PropModeReplace, 
       (unsigned char *)&xlib_wm_delete_atom, 1);
 
-  int xlib_image_width = xlib_window_x1 - xlib_window_x0;
-  int xlib_image_height = xlib_window_y1 - xlib_window_y0;
-  xlib_resize_image(xlib_image_width, xlib_image_height);
+  XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
+                                                            xlib_visual_info, 1280, 720);
 
   bool want_to_run = true;
   int x_offset = 0;
@@ -237,10 +270,11 @@ main(int argc, char *argv[])
       }
     }
 
-    render_weird_gradient(x_offset, 0);
+    render_weird_gradient(xlib_back_buffer, x_offset, 0);
     x_offset++;
 
-    xlib_display_image(xlib_gc, xlib_window);
+    xlib_display_back_buffer(xlib_display, xrender_pict_format, xlib_window,
+                             xlib_gc, xlib_back_buffer);
   }
 
   return 0;
