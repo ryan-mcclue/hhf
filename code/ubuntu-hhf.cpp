@@ -81,9 +81,9 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
   int bytes_per_pixel = 4;
   int fd = -1;
   int offset = 0;
- // back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
- //                                 PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, fd, offset);
-  back_buffer.memory = (u8 *)calloc(width * height, bytes_per_pixel);
+  back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
+                                  PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 
+                                  fd, offset);
   if (back_buffer.memory == NULL)
   {
     // TODO(Ryan): Error logging
@@ -123,16 +123,15 @@ xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window win
                                           format, 0, 
                                           &pict_attributes);
   Picture dst_pict = XRenderCreatePicture(display, window, 
-                                          format, 0, 
-                                          &pict_attributes);
+                                          format, 0, &pict_attributes);
   
   // TODO(Ryan): Restrict to particular resolutions that align with our art
-  double x_scale = back_buffer.width / window_width;
-  double y_scale = back_buffer.height / window_height;
+  double x_scale = back_buffer.width / (double)window_width;
+  double y_scale = back_buffer.height / (double)window_height;
   XTransform transform_matrix = {{
     {XDoubleToFixed(x_scale), XDoubleToFixed(0), XDoubleToFixed(0)},
     {XDoubleToFixed(0), XDoubleToFixed(y_scale), XDoubleToFixed(0)},
-    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1.0)}  
+    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)}  
   }};
   XRenderSetPictureTransform(display, src_pict, &transform_matrix);
   
