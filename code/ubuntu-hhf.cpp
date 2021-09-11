@@ -1,8 +1,11 @@
 // SPDX-License-Identifier: zlib-acknowledgement 
 
+#include <sys/mman.h>
+
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
+#include <X11/extensions/Xrender.h>
 
 #include <string_view>
 #include <cstdio>
@@ -18,10 +21,15 @@
 typedef uint8_t u8;
 typedef uint32_t u32;
 
-GLOBAL Display *xlib_display;
-GLOBAL XVisualInfo xlib_visual_info;
-GLOBAL XImage *xlib_image;
-GLOBAL u8 *back_buffer;
+struct XlibBackBuffer
+{
+  XImage *image;
+  Pixmap pixmap;
+  // NOTE(Ryan): Memory order: XX RR GG BB
+  u8 *memory;
+  int width;
+  int height;
+};
 
 #if defined(HHF_DEV)
 INTERNAL void __bp(void) { return; }
@@ -62,54 +70,84 @@ xlib_io_error_handler(Display *display)
   return 1;
 }
 
-INTERNAL void
-xlib_resize_image(int width, int height)
+INTERNAL XlibBackBuffer
+xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info, 
+                        int width, int height)
 {
-  if (xlib_image != NULL)
-  {
-    XDestroyImage(xlib_image);
-  }
+  XlibBackBuffer back_buffer = {};
 
   int bytes_per_pixel = 4;
-  // IMPORTANT(Ryan): Would like to use mmap() for page-aligned return and memory 
-  // commit/protection options, however XDestroyImage() expects memory to be allocated with stdlib
-  back_buffer = (u8 *)calloc(width * height, bytes_per_pixel);
-  if (back_buffer == NULL)
+  int fd = -1;
+  int offset = 0;
+  back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
+                                  PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, 
+                                  fd, offset);
+  if (back_buffer.memory == NULL)
   {
     // TODO(Ryan): Error logging
     EBP();
   }
+  back_buffer.width = width;
+  back_buffer.height = height;
 
-  int xlib_image_offset = 0;
-  int xlib_image_scanline_offset = 0;
-  int xlib_image_pad_bits = 32;
-  xlib_image = XCreateImage(xlib_display, xlib_visual_info.visual, xlib_visual_info.depth,
-                            ZPixmap, xlib_image_offset, (char *)back_buffer, width, height,
-                            xlib_image_pad_bits, xlib_image_scanline_offset);
-  if (xlib_image == NULL)
+  int image_offset = 0;
+  int image_scanline_offset = 0;
+  int image_pad_bits = 32;
+  back_buffer.image = XCreateImage(display, visual_info.visual, visual_info.depth,
+                            ZPixmap, image_offset, (char *)back_buffer.memory, width, height,
+                            image_pad_bits, image_scanline_offset);
+  if (back_buffer.image == NULL)
   {
     // TODO(Ryan): Error logging
     BP();
   }
+
+  back_buffer.pixmap = XCreatePixmap(display, window,
+                                     back_buffer.width, back_buffer.height,
+                                     visual_info.depth);
+
+  return back_buffer;
 }
 
 INTERNAL void
-xlib_display_image(GC gc, Window window)
+xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
+                         GC gc, XlibBackBuffer back_buffer, int window_width, int window_height)
 {
-  XPutImage(xlib_display, window, gc, xlib_image,
-      0, 0, 0, 0, xlib_image->width, xlib_image->height); 
+  XPutImage(display, back_buffer.pixmap, gc, back_buffer.image, 
+          0, 0, 0, 0, back_buffer.width, back_buffer.height);
+  
+  XRenderPictureAttributes pict_attributes = {};
+  Picture src_pict = XRenderCreatePicture(display, back_buffer.pixmap, 
+                                          format, 0, 
+                                          &pict_attributes);
+  Picture dst_pict = XRenderCreatePicture(display, window, 
+                                          format, 0, &pict_attributes);
+  
+  // TODO(Ryan): Restrict to particular resolutions that align with our art
+  double x_scale = back_buffer.width / (double)window_width;
+  double y_scale = back_buffer.height / (double)window_height;
+  XTransform transform_matrix = {{
+    {XDoubleToFixed(x_scale), XDoubleToFixed(0), XDoubleToFixed(0)},
+    {XDoubleToFixed(0), XDoubleToFixed(y_scale), XDoubleToFixed(0)},
+    {XDoubleToFixed(0), XDoubleToFixed(0), XDoubleToFixed(1)}  
+  }};
+  XRenderSetPictureTransform(display, src_pict, &transform_matrix);
+  
+  XRenderComposite(display, PictOpSrc, src_pict, 0, dst_pict, 
+                  0, 0, 0, 0, 0, 0,
+                  window_width, window_height);
 }
 
 INTERNAL void
-render_weird_gradient(int x_offset, int y_offset)
+render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
 {
-  u32 *pixel = (u32 *)back_buffer;
+  u32 *pixel = (u32 *)back_buffer.memory;
   for (int back_buffer_y = 0; 
-        back_buffer_y < xlib_image->height;
+        back_buffer_y < back_buffer.height;
         ++back_buffer_y)
   {
     for (int back_buffer_x = 0; 
-        back_buffer_x < xlib_image->width;
+        back_buffer_x < back_buffer.width;
         ++back_buffer_x)
     {
       u8 red = back_buffer_x + x_offset;
@@ -123,7 +161,7 @@ render_weird_gradient(int x_offset, int y_offset)
 int
 main(int argc, char *argv[])
 {
-  xlib_display = XOpenDisplay(NULL);
+  Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL)
   {
     // TODO(Ryan): Error logging
@@ -135,6 +173,7 @@ main(int argc, char *argv[])
 
   int xlib_screen = XDefaultScreen(xlib_display);
   int xlib_desired_screen_depth = 24;
+  XVisualInfo xlib_visual_info = {};
   Status xlib_visual_info_status = XMatchVisualInfo(xlib_display, xlib_screen, 
                                                     xlib_desired_screen_depth, TrueColor,
                                                     &xlib_visual_info);
@@ -191,10 +230,14 @@ main(int argc, char *argv[])
       xlib_window_protocols_property_granularity, PropModeReplace, 
       (unsigned char *)&xlib_wm_delete_atom, 1);
 
-  int xlib_image_width = xlib_window_x1 - xlib_window_x0;
-  int xlib_image_height = xlib_window_y1 - xlib_window_y0;
-  xlib_resize_image(xlib_image_width, xlib_image_height);
+  XRenderPictFormat *xrender_pic_format = XRenderFindVisualFormat(xlib_display, 
+                                                               xlib_visual_info.visual);
 
+  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
+  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
+  XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
+                                                            xlib_visual_info, 1280, 720);
+  
   bool want_to_run = true;
   int x_offset = 0;
   while (want_to_run)
@@ -206,16 +249,8 @@ main(int argc, char *argv[])
       {
         case ConfigureNotify:
         {
-          int cur_window_width = xlib_event.xconfigure.width;
-          int cur_window_height = xlib_event.xconfigure.height;
-          if (xlib_image_width != cur_window_width ||
-              xlib_image_height != cur_window_height)
-          {
-            xlib_image_width = cur_window_width;
-            xlib_image_height = cur_window_height;
-            // TODO(Ryan): Restrict to particular resolutions that align with our art
-            xlib_resize_image(xlib_image_width, xlib_image_height);
-          }
+          xlib_window_width = xlib_event.xconfigure.width;
+          xlib_window_height = xlib_event.xconfigure.height;
         } break;
       }
     }
@@ -230,10 +265,12 @@ main(int argc, char *argv[])
       }
     }
 
-    render_weird_gradient(x_offset, 0);
+    render_weird_gradient(xlib_back_buffer, x_offset, 0);
     x_offset++;
 
-    xlib_display_image(xlib_gc, xlib_window);
+    xlib_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
+                             xlib_gc, xlib_back_buffer, xlib_window_width, 
+                             xlib_window_height);
   }
 
   return 0;

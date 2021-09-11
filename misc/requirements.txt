@@ -1,3 +1,4 @@
 libc6-dbg
 glibc-source
 libx11-dev
+libxrender-dev
