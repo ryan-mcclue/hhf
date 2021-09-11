@@ -81,13 +81,16 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
   int bytes_per_pixel = 4;
   int fd = -1;
   int offset = 0;
-  back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
-                                  PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, fd, offset);
+ // back_buffer.memory = (u8 *)mmap(NULL, width * height * bytes_per_pixel, 
+ //                                 PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, fd, offset);
+  back_buffer.memory = (u8 *)calloc(width * height, bytes_per_pixel);
   if (back_buffer.memory == NULL)
   {
     // TODO(Ryan): Error logging
     EBP();
   }
+  back_buffer.width = width;
+  back_buffer.height = height;
 
   int image_offset = 0;
   int image_scanline_offset = 0;
@@ -102,8 +105,8 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
   }
 
   back_buffer.pixmap = XCreatePixmap(display, window,
-                                          back_buffer.width, back_buffer.height,
-                                          visual_info.depth);
+                                     back_buffer.width, back_buffer.height,
+                                     visual_info.depth);
 
   return back_buffer;
 }
