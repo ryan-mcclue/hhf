@@ -1,6 +1,17 @@
 // SPDX-License-Identifier: zlib-acknowledgement 
 
 #include <sys/mman.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <dirent.h>
+struct linux_dirent64
+{
+  ino64_t d_ino;
+  off64_t d_off;
+  unsigned short d_reclen;
+  unsigned char  d_type;
+  char d_name[];
+};
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -9,7 +20,7 @@
 
 #include <string_view>
 #include <cstdio>
-#include <cstring>
+#include <cstring> 
 #include <cerrno>
 #include <cstdlib>
 #include <cstdint>
@@ -158,6 +169,48 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
   }
 }
 
+INTERNAL void
+evdev_find_gamepad_and_keyboard()
+{
+  //int evdev_fd = epoll_create1(0);
+ // struct linux_dirent64 *dirent = NULL;
+  int evdev_input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
+  if (evdev_input_fd == -1)
+  {
+    EBP();
+  }
+  char evdev_input_buf[1024] = {};
+  int evdev_bytes_read = 0, total_evdev_bytes_read = 0;
+  do
+  {
+    evdev_bytes_read = getdents64(evdev_input_fd, evdev_input_buf, sizeof(evdev_input_buf));
+    if (evdev_bytes_read == -1)
+    {
+      EBP();
+    }
+    total_evdev_bytes_read += evdev_bytes_read;
+  } while (evdev_bytes_read != 0);
+
+  int evdev_dirent_cursor = 0;
+  while (evdev_dirent_cursor < total_evdev_bytes_read)
+  {
+    struct linux_dirent64 *evdev_dirent = (struct linux_dirent64 *)
+                                          (evdev_input_buf + evdev_dirent_cursor);
+    if (strncmp(evdev_dirent->d_name, "event", 5) == 0)
+    {
+      char dev_path[128] = {"/dev/input"};
+      strcat(dev_path, evdev_dirent->d_name);
+
+      int dev_fd = open(dev_path, O_RDONLY);
+      if (dev_fd == -1)
+      {
+        EBP();
+      }
+    }
+    evdev_dirent_cursor += evdev_dirent->d_reclen;
+  }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -238,6 +291,8 @@ main(int argc, char *argv[])
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
   
+  evdev_find_gamepad_and_keyboard();
+
   bool want_to_run = true;
   int x_offset = 0;
   while (want_to_run)
