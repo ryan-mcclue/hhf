@@ -2,7 +2,9 @@
 
 #include <sys/mman.h>
 #include <sys/epoll.h>
+#include <sys/socket.h>
 #include <fcntl.h>
+#include <unistd.h>
 #include <dirent.h>
 struct linux_dirent64
 {
@@ -12,6 +14,7 @@ struct linux_dirent64
   unsigned char  d_type;
   char d_name[];
 };
+#include <linux/netlink.h>
 #include <linux/input.h>
 
 #include <X11/Xlib.h>
@@ -242,20 +245,6 @@ evdev_find_gamepad_and_keyboard(void)
     input_dirent_cursor += input_dirent->d_reclen;
   }
 
-  // uevent input device is /dev/input/eventX@ACTION 
-  /* with nonblocking
-     int sock_fd = socket();
-     int sock_flags = fcntl(sock_fd, F_GETFL);
-     fcntl(sock_fd, F_SETFL, sock_flags | O_NONBLOCK);
-     int bytes_received = recv();
-     if (bytes_received == -1)
-     {
-       if (errno != EWOULDBLOCK)
-       {
-         EBP();
-       }
-     }
-  */
 }
 
 int
@@ -338,7 +327,77 @@ main(int argc, char *argv[])
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
   
-  evdev_find_gamepad_and_keyboard();
+  //evdev_find_gamepad_and_keyboard();
+
+  // uevent input device is /dev/input/eventX@ACTION 
+  /* 
+     int bytes_received = recv();
+     if (bytes_received == -1)
+     {
+       if (errno != EWOULDBLOCK)
+       {
+         EBP();
+       }
+     }
+  */
+  int uevent_socket = socket(PF_NETLINK, SOCK_DGRAM | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
+  if (uevent_socket == -1)
+  {
+    EBP();
+  }
+
+  struct sockaddr_nl uevent_src_addr = {};
+  uevent_src_addr.nl_family = AF_NETLINK;
+  //uevent_src_addr.nl_pid = getpid();
+  // only concerned with add/remove 
+  uevent_src_addr.nl_groups = 1 << 0; // (-1 would give kernel broadcast, i.e. all events)
+  if (bind(uevent_socket, (struct sockaddr *)&uevent_src_addr, sizeof(uevent_src_addr)) == -1)
+  {
+    EBP();
+  }
+
+  struct nlmsghdr buf[8192] = {};
+  struct iovec iov = {};
+  iov.iov_base = &buf;
+  iov.iov_len = sizeof(buf);
+
+  struct sockaddr_nl kernel_addr = {};
+  // using recvmsg good for multi-part header/payload formats as in netlink
+  struct msghdr msg = {};
+  msg.msg_name = &kernel_addr; 
+  msg.msg_namelen = sizeof(kernel_addr);
+  msg.msg_iov = &iov;
+  msg.msg_iovlen = 1;
+
+  int len = recvmsg(uevent_socket, &msg, 0);
+  if (len == -1)
+  {
+    if (errno == EWOULDBLOCK)
+    {
+      struct nlmsghdr *nlmsghdr_cursor = NULL;
+      for (nlmsghdr_cursor = (struct nlmsghdr *)buf; 
+           NLMSG_OK(nlmsghdr_cursor, len); 
+           nlmsghdr_cursor = NLMSG_NEXT(nlmsghdr_cursor, len)) 
+      {
+                   /* The end of multipart message */
+        if (nlmsghdr_cursor->nlmsg_type == NLMSG_DONE)
+            return;
+
+        if (nlmsghdr_cursor->nlmsg_type == NLMSG_ERROR)
+            /* Do some error handling */
+        ...
+
+
+        /* Continue with parsing payload */
+        ...
+               }
+    }
+    else
+    {
+      EBP();
+    }
+  }
+
 
   bool want_to_run = true;
   int x_offset = 0;
