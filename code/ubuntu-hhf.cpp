@@ -12,6 +12,7 @@ struct linux_dirent64
   unsigned char  d_type;
   char d_name[];
 };
+#include <linux/input.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -170,45 +171,91 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
 }
 
 INTERNAL void
-evdev_find_gamepad_and_keyboard()
+evdev_find_gamepad_and_keyboard(void)
 {
   //int evdev_fd = epoll_create1(0);
  // struct linux_dirent64 *dirent = NULL;
-  int evdev_input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
-  if (evdev_input_fd == -1)
+  int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
+  if (input_fd == -1)
   {
     EBP();
   }
-  char evdev_input_buf[1024] = {};
-  int evdev_bytes_read = 0, total_evdev_bytes_read = 0;
+  char input_dirent_buf[1024] = {};
+  int input_dirent_bytes_read = 0, total_input_dirent_bytes_read = 0;
   do
   {
-    evdev_bytes_read = getdents64(evdev_input_fd, evdev_input_buf, sizeof(evdev_input_buf));
-    if (evdev_bytes_read == -1)
+    input_dirent_bytes_read = getdents64(input_fd, input_dirent_buf, sizeof(input_dirent_buf));
+    if (input_dirent_bytes_read == -1)
     {
       EBP();
     }
-    total_evdev_bytes_read += evdev_bytes_read;
-  } while (evdev_bytes_read != 0);
+    total_input_dirent_bytes_read += input_dirent_bytes_read;
+  } while (input_dirent_bytes_read != 0);
 
-  int evdev_dirent_cursor = 0;
-  while (evdev_dirent_cursor < total_evdev_bytes_read)
+  int input_dirent_cursor = 0;
+  while (input_dirent_cursor < total_input_dirent_bytes_read)
   {
-    struct linux_dirent64 *evdev_dirent = (struct linux_dirent64 *)
-                                          (evdev_input_buf + evdev_dirent_cursor);
-    if (strncmp(evdev_dirent->d_name, "event", 5) == 0)
+    struct linux_dirent64 *input_dirent = (struct linux_dirent64 *)
+                                          (input_dirent_buf + input_dirent_cursor);
+    if (strncmp(input_dirent->d_name, "event", 5) == 0)
     {
-      char dev_path[128] = {"/dev/input"};
-      strcat(dev_path, evdev_dirent->d_name);
+      char dev_path[128] = {"/dev/input/"};
+      strcat(dev_path, input_dirent->d_name);
 
       int dev_fd = open(dev_path, O_RDONLY);
       if (dev_fd == -1)
       {
         EBP();
       }
+
+#define EVDEV_BITFIELD_QUANTA \
+  (sizeof(unsigned long) * 8)
+#define EVDEV_BITFIELD_LEN(bit_count) \
+  ((bit_count) / EVDEV_BITFIELD_QUANTA + 1)
+#define EVDEV_BITFIELD_TEST(bitfield, bit) \
+  (((bitfield)[(bit) / EVDEV_BITFIELD_QUANTA] >> \
+     ((bit) % EVDEV_BITFIELD_QUANTA)) & 0x1)
+
+      unsigned long dev_key_capabilites[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilites) == -1)
+      {
+        EBP();
+      }
+
+      char dev_name[256] = {};
+      if (ioctl(dev_fd, EVIOCGNAME(sizeof(dev_name)), dev_name) == -1)
+      {
+        EBP();
+      }
+
+      //if (dev_key_capabilites[0] & 0xfffffffe)
+      //{
+      //  printf("Found keyboard: %s\n", dev_name);
+      //}
+
+      if (EVDEV_BITFIELD_TEST(dev_key_capabilites, BTN_GAMEPAD))
+      {
+        printf("Found gamepad: %s\n", dev_name);
+      }
+
     }
-    evdev_dirent_cursor += evdev_dirent->d_reclen;
+    input_dirent_cursor += input_dirent->d_reclen;
   }
+
+  // uevent input device is /dev/input/eventX@ACTION 
+  /* with nonblocking
+     int sock_fd = socket();
+     int sock_flags = fcntl(sock_fd, F_GETFL);
+     fcntl(sock_fd, F_SETFL, sock_flags | O_NONBLOCK);
+     int bytes_received = recv();
+     if (bytes_received == -1)
+     {
+       if (errno != EWOULDBLOCK)
+       {
+         EBP();
+       }
+     }
+  */
 }
 
 int
