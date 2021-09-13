@@ -34,6 +34,7 @@ union UeventBuffer
 #include <cerrno>
 #include <cstdlib>
 #include <cstdint>
+#include <cctype>
 
 #define INTERNAL static
 #define GLOBAL static
@@ -398,19 +399,34 @@ main(int argc, char *argv[])
     if (uevent_bytes_received > 0)
     {
       // TODO(Ryan): Is there a cleaner way that uses netlink macros to parse?
-      std::string_view uevent_buffer_str {uevent_buffer.raw};
-      if (uevent_buffer_str.find("/event"))
+      char *uevent_buffer_str = uevent_buffer.raw;
+      char uevent_command[64] = {};
+
+      int uevent_buffer_i = 0; 
+      while (uevent_buffer_str[uevent_buffer_i] != '@')
       {
-        std::string_view uevent_command = uevent_buffer_str.
-                                          substr(0, uevent_buffer_str.find("@"));
-        std::string_view device_id = uevent_buffer_str.
-                                     substr(uevent_buffer_str.
-                                            find_last_not_of("0123456789") + 1);
+        uevent_command[uevent_buffer_i] = uevent_buffer_str[uevent_buffer_i];
+        uevent_buffer_i++;
+      }
+      uevent_command[uevent_buffer_i] = '\0';
+
+      char *event_start_str = strstr(uevent_buffer_str, "/event");
+      if (event_start_str != NULL)
+      {
+        char device_id[4] = {};
+        int device_id_i = 0;
+        event_start_str += 6;
+        while (isdigit(*event_start_str))
+        {
+          device_id[device_id_i] = *event_start_str++;
+          device_id_i++;
+        }
+        device_id[device_id_i] = '\0';
+
         char evdev_device_path[128] = {};
         strcpy(evdev_device_path, "/dev/input/event");
-        strcat(evdev_device_path, (const char *)device_id.data());
-        printf("Device: %s was %s\n", evdev_device_path, 
-              (const char *)uevent_command.data());
+        strcat(evdev_device_path, device_id);
+        printf("Device: %s was %s\n", evdev_device_path, uevent_command);
       }
     }
 
