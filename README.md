@@ -7,8 +7,7 @@ An Ubuntu/Linux fork of Casey Muratori's brilliant [Handmade Hero](https://handm
 
 ## Executables
 ```
-xargs -a misc/requirements.txt sudo apt install 
-
+sh misc/dependencies
 sh misc/build
 ./build/ubuntu-hhf
 ```
