@@ -6,7 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <dirent.h>
-struct linux_dirent64
+struct LinuxDirent64
 {
   ino64_t d_ino;
   off64_t d_off;
@@ -15,6 +15,12 @@ struct linux_dirent64
   char d_name[];
 };
 #include <linux/netlink.h>
+#define NETLINK_MAX_PAYLOAD 8192
+union UeventBuffer
+{
+  struct nlmsghdr netlink_header;
+  char raw[NETLINK_MAX_PAYLOAD];
+};
 #include <linux/input.h>
 
 #include <X11/Xlib.h>
@@ -177,7 +183,7 @@ INTERNAL void
 evdev_find_gamepad_and_keyboard(void)
 {
   //int evdev_fd = epoll_create1(0);
- // struct linux_dirent64 *dirent = NULL;
+ // struct LinuxDirent64 *dirent = NULL;
   int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
   if (input_fd == -1)
   {
@@ -198,11 +204,12 @@ evdev_find_gamepad_and_keyboard(void)
   int input_dirent_cursor = 0;
   while (input_dirent_cursor < total_input_dirent_bytes_read)
   {
-    struct linux_dirent64 *input_dirent = (struct linux_dirent64 *)
-                                          (input_dirent_buf + input_dirent_cursor);
+    LinuxDirent64 *input_dirent = (LinuxDirent64 *)
+                                  (input_dirent_buf + input_dirent_cursor);
     if (strncmp(input_dirent->d_name, "event", 5) == 0)
     {
-      char dev_path[128] = {"/dev/input/"};
+      char dev_path[128] = {};
+      strcpy(dev_path, "/dev/input/");
       strcat(dev_path, input_dirent->d_name);
 
       int dev_fd = open(dev_path, O_RDONLY);
@@ -329,75 +336,32 @@ main(int argc, char *argv[])
   
   //evdev_find_gamepad_and_keyboard();
 
-  // uevent input device is /dev/input/eventX@ACTION 
-  /* 
-     int bytes_received = recv();
-     if (bytes_received == -1)
-     {
-       if (errno != EWOULDBLOCK)
-       {
-         EBP();
-       }
-     }
-  */
-  int uevent_socket = socket(PF_NETLINK, SOCK_DGRAM | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
+  // TODO(Ryan): Pick up snd devices
+  int uevent_socket = socket(PF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
   if (uevent_socket == -1)
   {
     EBP();
   }
 
-  struct sockaddr_nl uevent_src_addr = {};
-  uevent_src_addr.nl_family = AF_NETLINK;
-  //uevent_src_addr.nl_pid = getpid();
-  // only concerned with add/remove 
-  uevent_src_addr.nl_groups = 1 << 0; // (-1 would give kernel broadcast, i.e. all events)
-  if (bind(uevent_socket, (struct sockaddr *)&uevent_src_addr, sizeof(uevent_src_addr)) == -1)
+  struct sockaddr_nl uevent_addr = {};
+  uevent_addr.nl_family = AF_NETLINK;
+  uevent_addr.nl_groups = 1 << 0;
+  if (bind(uevent_socket, (struct sockaddr *)&uevent_addr, sizeof(uevent_addr)) == -1)
   {
     EBP();
   }
 
-  struct nlmsghdr buf[8192] = {};
-  struct iovec iov = {};
-  iov.iov_base = &buf;
-  iov.iov_len = sizeof(buf);
+  UeventBuffer uevent_buffer = {};
+  struct iovec uevent_iov = {};
+  uevent_iov.iov_base = &uevent_buffer;
+  uevent_iov.iov_len = sizeof(uevent_buffer);
 
-  struct sockaddr_nl kernel_addr = {};
-  // using recvmsg good for multi-part header/payload formats as in netlink
-  struct msghdr msg = {};
-  msg.msg_name = &kernel_addr; 
-  msg.msg_namelen = sizeof(kernel_addr);
-  msg.msg_iov = &iov;
-  msg.msg_iovlen = 1;
-
-  int len = recvmsg(uevent_socket, &msg, 0);
-  if (len == -1)
-  {
-    if (errno == EWOULDBLOCK)
-    {
-      struct nlmsghdr *nlmsghdr_cursor = NULL;
-      for (nlmsghdr_cursor = (struct nlmsghdr *)buf; 
-           NLMSG_OK(nlmsghdr_cursor, len); 
-           nlmsghdr_cursor = NLMSG_NEXT(nlmsghdr_cursor, len)) 
-      {
-                   /* The end of multipart message */
-        if (nlmsghdr_cursor->nlmsg_type == NLMSG_DONE)
-            return;
-
-        if (nlmsghdr_cursor->nlmsg_type == NLMSG_ERROR)
-            /* Do some error handling */
-        ...
-
-
-        /* Continue with parsing payload */
-        ...
-               }
-    }
-    else
-    {
-      EBP();
-    }
-  }
-
+  struct msghdr uevent_msg = {};
+  struct sockaddr_nl uevent_src_addr = {};
+  uevent_msg.msg_name = &uevent_src_addr;
+  uevent_msg.msg_namelen = sizeof(uevent_src_addr);
+  uevent_msg.msg_iov = &uevent_iov;
+  uevent_msg.msg_iovlen = 1;
 
   bool want_to_run = true;
   int x_offset = 0;
@@ -423,6 +387,30 @@ main(int argc, char *argv[])
         XDestroyWindow(xlib_display, xlib_window);
         want_to_run = false;
         break;
+      }
+    }
+
+    int uevent_bytes_received = recvmsg(uevent_socket, &uevent_msg, 0); 
+    if (uevent_bytes_received == -1 && errno != EWOULDBLOCK)
+    {
+        EBP();
+    }
+    if (uevent_bytes_received > 0)
+    {
+      // TODO(Ryan): Is there a cleaner way that uses netlink macros to parse?
+      std::string_view uevent_buffer_str {uevent_buffer.raw};
+      if (uevent_buffer_str.find("/event"))
+      {
+        std::string_view uevent_command = uevent_buffer_str.
+                                          substr(0, uevent_buffer_str.find("@"));
+        std::string_view device_id = uevent_buffer_str.
+                                     substr(uevent_buffer_str.
+                                            find_last_not_of("0123456789") + 1);
+        char evdev_device_path[128] = {};
+        strcpy(evdev_device_path, "/dev/input/event");
+        strcat(evdev_device_path, (const char *)device_id.data());
+        printf("Device: %s was %s\n", evdev_device_path, 
+              (const char *)uevent_command.data());
       }
     }
 
