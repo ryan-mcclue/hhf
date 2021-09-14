@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: zlib-acknowledgement 
 
+#define INTERNAL static
+#define GLOBAL static
+#define LOCAL_PERSIST static
+
 #include <sys/mman.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -22,6 +26,19 @@ union UeventBuffer
   char raw[NETLINK_MAX_PAYLOAD];
 };
 #include <linux/input.h>
+#define EVDEV_BITFIELD_QUANTA \
+  (sizeof(unsigned long) * 8)
+#define EVDEV_BITFIELD_LEN(bit_count) \
+  ((bit_count) / EVDEV_BITFIELD_QUANTA + 1)
+#define EVDEV_BITFIELD_TEST(bitfield, bit) \
+  (((bitfield)[(bit) / EVDEV_BITFIELD_QUANTA] >> \
+     ((bit) % EVDEV_BITFIELD_QUANTA)) & 0x1)
+enum EVDEV_DEVICE_TYPE
+{
+  EVDEV_KEYBOARD,
+  EVDEV_GAMEPAD
+};
+#define RLIMIT_NOFILE 1024
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -35,10 +52,6 @@ union UeventBuffer
 #include <cstdlib>
 #include <cstdint>
 #include <cctype>
-
-#define INTERNAL static
-#define GLOBAL static
-#define LOCAL_PERSIST static
 
 typedef uint8_t u8;
 typedef uint32_t u32;
@@ -180,11 +193,9 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
   }
 }
 
-INTERNAL void
-evdev_find_gamepad_and_keyboard(void)
+INTERNAL void 
+evdev_populate_input_devices(int epoll_fd, int input_devices[RLIMIT_NOFILE])
 {
-  //int evdev_fd = epoll_create1(0);
- // struct LinuxDirent64 *dirent = NULL;
   int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
   if (input_fd == -1)
   {
@@ -194,7 +205,8 @@ evdev_find_gamepad_and_keyboard(void)
   int input_dirent_bytes_read = 0, total_input_dirent_bytes_read = 0;
   do
   {
-    input_dirent_bytes_read = getdents64(input_fd, input_dirent_buf, sizeof(input_dirent_buf));
+    input_dirent_bytes_read = getdents64(input_fd, input_dirent_buf, 
+                                         sizeof(input_dirent_buf));
     if (input_dirent_bytes_read == -1)
     {
       EBP();
@@ -219,14 +231,6 @@ evdev_find_gamepad_and_keyboard(void)
         EBP();
       }
 
-#define EVDEV_BITFIELD_QUANTA \
-  (sizeof(unsigned long) * 8)
-#define EVDEV_BITFIELD_LEN(bit_count) \
-  ((bit_count) / EVDEV_BITFIELD_QUANTA + 1)
-#define EVDEV_BITFIELD_TEST(bitfield, bit) \
-  (((bitfield)[(bit) / EVDEV_BITFIELD_QUANTA] >> \
-     ((bit) % EVDEV_BITFIELD_QUANTA)) & 0x1)
-
       unsigned long dev_key_capabilites[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
       if (ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilites) == -1)
       {
@@ -246,13 +250,18 @@ evdev_find_gamepad_and_keyboard(void)
 
       if (EVDEV_BITFIELD_TEST(dev_key_capabilites, BTN_GAMEPAD))
       {
-        printf("Found gamepad: %s\n", dev_name);
+        input_devices[dev_fd] = EVDEV_GAMEPAD;
+        struct epoll_event event = {};
+        event.events = EPOLLIN;
+        event.data.fd = dev_fd;
+        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
       }
 
     }
     input_dirent_cursor += input_dirent->d_reclen;
   }
 
+  close(input_fd);
 }
 
 int
@@ -352,6 +361,7 @@ main(int argc, char *argv[])
     EBP();
   }
 
+
   UeventBuffer uevent_buffer = {};
   struct iovec uevent_iov = {};
   uevent_iov.iov_base = &uevent_buffer;
@@ -391,6 +401,10 @@ main(int argc, char *argv[])
       }
     }
 
+    // check_for_input_device_addition_removal()
+
+    // TODO(Ryan): Should we poll this more frequently?
+    // poll_input_devices();
     int uevent_bytes_received = recvmsg(uevent_socket, &uevent_msg, 0); 
     if (uevent_bytes_received == -1 && errno != EWOULDBLOCK)
     {
@@ -426,8 +440,9 @@ main(int argc, char *argv[])
         char evdev_device_path[128] = {};
         strcpy(evdev_device_path, "/dev/input/event");
         strcat(evdev_device_path, device_id);
-        printf("Device: %s was %s\n", evdev_device_path, uevent_command);
+        //printf("Device: %s was %s\n", evdev_device_path, uevent_command);
       }
+      printf("%s\n", uevent_buffer_str);
     }
 
     render_weird_gradient(xlib_back_buffer, x_offset, 0);
@@ -440,3 +455,50 @@ main(int argc, char *argv[])
 
   return 0;
 }
+
+/*
+  TODO(Ryan): Use BPF (allows calls to kernel without context switching)
+  gcc will compile restricted c code to bpf byte-code which will be checked by bpf-verifier
+  have access to bpf helper functions
+  kernel contains a bpf interpreter/jit that will execute this
+  bpf program will run on some event 
+
+  kprobe event allows us to trace on a kernel routine. if we map a syscall to
+  a kernel routine, e.g clone, can monitor when processes are spawned
+
+  #include <linux/filter.h>
+
+  struct sock_fprog filter = {};
+  filter.len = num_instructions;
+  filter.filter = instructions;
+
+  setsockopt(sock, SOL_SOCKET, SO_ATTACH_FILTER, &filter, sizeof(filter));
+
+  struct sock_filter instructions[512] = {};
+  
+  bpf_statement();
+
+  bpf_stmt(ins, &i, BPF_LD|BPF_W|BPF_ABS, offsetof(monitor_netlink_header, magic));
+
+  static void bpf_stmt(struct sock_filter *ins, unsigned *i,
+                     unsigned short code, unsigned data) {
+        ins[(*i)++] = (struct sock_filter) {
+                .code = code,
+                .k = data,
+        };
+
+
+  bpf_jmp(ins, &i, BPF_JMP|BPF_JEQ|BPF_K, UDEV_MONITOR_MAGIC, 1, 0);
+
+static void bpf_jmp(struct sock_filter *ins, unsigned *i,
+                    unsigned short code, unsigned data,
+                    unsigned short jt, unsigned short jf) {
+        ins[(*i)++] = (struct sock_filter) {
+                .code = code,
+                .jt = jt,
+                .jf = jf,
+                .k = data,
+        };
+}
+}
+*/
