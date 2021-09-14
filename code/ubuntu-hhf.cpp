@@ -35,10 +35,17 @@ union UeventBuffer
      ((bit) % EVDEV_BITFIELD_QUANTA)) & 0x1)
 enum EVDEV_DEVICE_TYPE
 {
-  EVDEV_KEYBOARD,
-  EVDEV_GAMEPAD
+  EVDEV_DEVICE_TYPE_IGNORE = 1,
+  EVDEV_DEVICE_TYPE_KEYBOARD,
+  EVDEV_DEVICE_TYPE_GAMEPAD,
+  EVDEV_DEVICE_TYPE_MOUSE,
 };
 #define RLIMIT_NOFILE 1024
+struct EvdevDevice
+{
+  EVDEV_DEVICE_TYPE type;
+  int event_id;
+};
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -193,8 +200,84 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
   }
 }
 
+INTERNAL int
+evdev_create_input_device_monitor(void)
+{
+  int uevent_socket = socket(PF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
+  if (uevent_socket == -1)
+  {
+    EBP();
+  }
+
+  struct sockaddr_nl uevent_addr = {};
+  uevent_addr.nl_family = AF_NETLINK;
+  uevent_addr.nl_groups = 1 << 0;
+  if (bind(uevent_socket, (struct sockaddr *)&uevent_addr, sizeof(uevent_addr)) == -1)
+  {
+    EBP();
+  }
+
+  UeventBuffer uevent_buffer = {};
+  struct iovec uevent_iov = {};
+  uevent_iov.iov_base = &uevent_buffer;
+  uevent_iov.iov_len = sizeof(uevent_buffer);
+
+  struct msghdr uevent_msg = {};
+  struct sockaddr_nl uevent_src_addr = {};
+  uevent_msg.msg_name = &uevent_src_addr;
+  uevent_msg.msg_namelen = sizeof(uevent_src_addr);
+  uevent_msg.msg_iov = &uevent_iov;
+  uevent_msg.msg_iovlen = 1;
+
+  return uevent_socket;
+}
+
+INTERNAL void
+uevent_monitor_evdev_input_devices(int monitor, evdev_device_b devices[RLIMIT_NOFILE])
+{
+    int uevent_bytes_received = recvmsg(uevent_socket, &uevent_msg, 0); 
+    if (uevent_bytes_received == -1 && errno != EWOULDBLOCK)
+    {
+        EBP();
+    }
+    if (uevent_bytes_received > 0)
+    {
+      // TODO(Ryan): Is there a cleaner way that uses netlink macros to parse?
+      char *uevent_buffer_str = uevent_buffer.raw;
+      char uevent_command[64] = {};
+
+      int uevent_buffer_i = 0; 
+      while (uevent_buffer_str[uevent_buffer_i] != '@')
+      {
+        uevent_command[uevent_buffer_i] = uevent_buffer_str[uevent_buffer_i];
+        uevent_buffer_i++;
+      }
+      uevent_command[uevent_buffer_i] = '\0';
+
+      char *event_start_str = strstr(uevent_buffer_str, "/event");
+      if (event_start_str != NULL)
+      {
+        char device_id[4] = {};
+        int device_id_i = 0;
+        event_start_str += 6;
+        while (isdigit(*event_start_str))
+        {
+          device_id[device_id_i] = *event_start_str++;
+          device_id_i++;
+        }
+        device_id[device_id_i] = '\0';
+
+        char evdev_device_path[128] = {};
+        strcpy(evdev_device_path, "/dev/input/event");
+        strcat(evdev_device_path, device_id);
+        //printf("Device: %s was %s\n", evdev_device_path, uevent_command);
+      }
+      printf("%s\n", uevent_buffer_str);
+    }
+}
+
 INTERNAL void 
-evdev_populate_input_devices(int epoll_fd, int input_devices[RLIMIT_NOFILE])
+evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFILE])
 {
   int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
   if (input_fd == -1)
@@ -231,8 +314,23 @@ evdev_populate_input_devices(int epoll_fd, int input_devices[RLIMIT_NOFILE])
         EBP();
       }
 
-      unsigned long dev_key_capabilites[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilites) == -1)
+      unsigned long dev_ev_capabilities[EVDEV_BITFIELD_LEN(EV_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(0, EV_CNT), dev_ev_capabilities) == -1)
+      {
+        EBP();
+      }
+      unsigned long dev_key_capabilities[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilities) == -1)
+      {
+        EBP();
+      }
+      unsigned long dev_abs_capabilities[EVDEV_BITFIELD_LEN(ABS_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_ABS, ABS_CNT), dev_abs_capabilities) == -1)
+      {
+        EBP();
+      }
+      unsigned long dev_rel_capabilities[EVDEV_BITFIELD_LEN(REL_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_REL, REL_CNT), dev_rel_capabilities) == -1)
       {
         EBP();
       }
@@ -243,21 +341,53 @@ evdev_populate_input_devices(int epoll_fd, int input_devices[RLIMIT_NOFILE])
         EBP();
       }
 
-      //if (dev_key_capabilites[0] & 0xfffffffe)
-      //{
-      //  printf("Found keyboard: %s\n", dev_name);
-      //}
+      EVDEV_DEVICE_TYPE dev_type = EVDEV_TYPE_IGNORE;
 
-      if (EVDEV_BITFIELD_TEST(dev_key_capabilites, BTN_GAMEPAD))
+      unsigned long esc_keys_letters_mask = 0xfffffffe;
+      if ((dev_key_capabilities[0] & esc_keys_letters_mask) != 0 &&
+           EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REP))
       {
-        input_devices[dev_fd] = EVDEV_GAMEPAD;
-        struct epoll_event event = {};
+        dev_type = EVDEV_TYPE_KEYBOARD;
+        printf("found keyboard: %s\n", dev_name);
+      }
+      if (EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_GAMEPAD))
+      {
+        dev_type = EVDEV_TYPE_GAMEPAD;
+        printf("found gamepad: %s\n", dev_name);
+      }
+      if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REL) &&
+          EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_X) && 
+          EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_Y) &&
+          EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_MOUSE))
+      {
+        dev_type = EVDEV_TYPE_MOUSE;
+        printf("found mouse: %s\n", dev_name);
+      }
+
+      if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_ABS) &&
+          EVDEV_BITFIELD_TEST(dev_abs_capabilities, ABS_X) && 
+          EVDEV_BITFIELD_TEST(dev_abs_capabilities, ABS_Y) &&
+          EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_TOOL_FINGER))
+      {
+        dev_type = EVDEV_TYPE_MOUSE;
+        printf("found touchpad: %s\n", dev_name);
+      }
+
+      if (dev_type != EVDEV_TYPE_IGNORE)
+      {
+        struct epoll_event event = {}; 
         event.events = EPOLLIN;
         event.data.fd = dev_fd;
         epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
+        // lower 16 event_id, upper 16 device_type
+        input_devices[dev_fd] = dev_type;
       }
-
+      else
+      {
+        close(dev_fd);
+      }
     }
+
     input_dirent_cursor += input_dirent->d_reclen;
   }
 
@@ -343,36 +473,14 @@ main(int argc, char *argv[])
   int xlib_window_height = xlib_window_y1 - xlib_window_y0;
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
-  
-  //evdev_find_gamepad_and_keyboard();
 
-  // TODO(Ryan): Pick up snd devices
-  int uevent_socket = socket(PF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
-  if (uevent_socket == -1)
-  {
-    EBP();
-  }
+  EvdevDevice evdev_input_devices[RLIMIT_NOFILE] = {};
+  int epoll_fd = epoll_create1(0);
+  evdev_populate_input_devices(epoll_fd, evdev_input_devices);
 
-  struct sockaddr_nl uevent_addr = {};
-  uevent_addr.nl_family = AF_NETLINK;
-  uevent_addr.nl_groups = 1 << 0;
-  if (bind(uevent_socket, (struct sockaddr *)&uevent_addr, sizeof(uevent_addr)) == -1)
-  {
-    EBP();
-  }
+  int uevent_monitor = uevent_create_monitor();
 
-
-  UeventBuffer uevent_buffer = {};
-  struct iovec uevent_iov = {};
-  uevent_iov.iov_base = &uevent_buffer;
-  uevent_iov.iov_len = sizeof(uevent_buffer);
-
-  struct msghdr uevent_msg = {};
-  struct sockaddr_nl uevent_src_addr = {};
-  uevent_msg.msg_name = &uevent_src_addr;
-  uevent_msg.msg_namelen = sizeof(uevent_src_addr);
-  uevent_msg.msg_iov = &uevent_iov;
-  uevent_msg.msg_iovlen = 1;
+  // NOTE(Ryan): Sound devices picked up with mixer events
 
   bool want_to_run = true;
   int x_offset = 0;
@@ -401,48 +509,46 @@ main(int argc, char *argv[])
       }
     }
 
-    // check_for_input_device_addition_removal()
+    uevent_monitor_evdev_input_devices(uevent_socket, evdev_input_devices);
 
+#define MAX_EVENTS 5
+#define TIMEOUT_MS 1
+    struct epoll_event epoll_evdev_input_device_events[MAX_EVENTS] = {0};
+    int num_epoll_evdev_input_device_events = 0;
     // TODO(Ryan): Should we poll this more frequently?
-    // poll_input_devices();
-    int uevent_bytes_received = recvmsg(uevent_socket, &uevent_msg, 0); 
-    if (uevent_bytes_received == -1 && errno != EWOULDBLOCK)
+    num_epoll_evdev_input_device_events = epoll_wait(epoll_evdev_input_device_fd, 
+                                        epoll_evdev_input_device_events, 
+                                        MAX_EVENTS, TIMEOUT_MS);
+    for (uint epoll_event = 0;
+        evdev_epoll_event < num_evdev_epoll_events; 
+        ++evdev_epoll_event)
     {
+      int device_fd = evdev_epoll_events[evdev_epoll_event].data.fd;
+      evdev_device_b device = evdev_input_devices[device_fd];
+      EVDEV_DEVICE_TYPE device_type = EVDEV_DEVICE_GET_TYPE(device);
+
+      struct input_event events[32] = {0};
+      int len = read(evdev_epoll_events[evdev_epoll_event].data.fd, 
+                     events, sizeof(events));
+      if (len == -1)
+      {
+        // TODO(EHANDLING | ELOGGING: Ryan)
         EBP();
-    }
-    if (uevent_bytes_received > 0)
-    {
-      // TODO(Ryan): Is there a cleaner way that uses netlink macros to parse?
-      char *uevent_buffer_str = uevent_buffer.raw;
-      char uevent_command[64] = {};
-
-      int uevent_buffer_i = 0; 
-      while (uevent_buffer_str[uevent_buffer_i] != '@')
-      {
-        uevent_command[uevent_buffer_i] = uevent_buffer_str[uevent_buffer_i];
-        uevent_buffer_i++;
       }
-      uevent_command[uevent_buffer_i] = '\0';
-
-      char *event_start_str = strstr(uevent_buffer_str, "/event");
-      if (event_start_str != NULL)
+      for (uint event_i = 0; event_i < len / sizeof(events[0]); ++event_i)
       {
-        char device_id[4] = {};
-        int device_id_i = 0;
-        event_start_str += 6;
-        while (isdigit(*event_start_str))
+        switch (events[event_i].type)
         {
-          device_id[device_id_i] = *event_start_str++;
-          device_id_i++;
+          case EV_KEY:
+          {
+            if (events[event_i].code == KEY_W)
+            {
+              puts("entered W");
+            }
+            bool is_released = (events[event_i].value == 0);
+          } break;
         }
-        device_id[device_id_i] = '\0';
-
-        char evdev_device_path[128] = {};
-        strcpy(evdev_device_path, "/dev/input/event");
-        strcat(evdev_device_path, device_id);
-        //printf("Device: %s was %s\n", evdev_device_path, uevent_command);
       }
-      printf("%s\n", uevent_buffer_str);
     }
 
     render_weird_gradient(xlib_back_buffer, x_offset, 0);
