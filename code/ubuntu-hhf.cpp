@@ -279,6 +279,9 @@ uevent_monitor_evdev_input_devices(int monitor, evdev_device_b devices[RLIMIT_NO
 INTERNAL void 
 evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFILE])
 {
+  // TODO(Ryan): 
+  // easier to loop over "/dev/input/event%d" and check if exists
+
   int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
   if (input_fd == -1)
   {
@@ -308,7 +311,7 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
       strcpy(dev_path, "/dev/input/");
       strcat(dev_path, input_dirent->d_name);
 
-      int dev_fd = open(dev_path, O_RDONLY);
+      int dev_fd = open(dev_path, O_RDWR);
       if (dev_fd == -1)
       {
         EBP();
@@ -334,6 +337,17 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
       {
         EBP();
       }
+      // ioctl(fd, EVIOCGEFFECTS, &num_simultaneous_effects)
+      unsigned long dev_ff_capabilities[EVDEV_BITFIELD_LEN(FF_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1)
+      {
+        EBP();
+      }
+      unsigned long dev_sw_capabilities[EVDEV_BITFIELD_LEN(SW_CNT)] = {};
+      if (ioctl(dev_fd, EVIOCGBIT(EV_SW, SW_CNT), dev_sw_capabilities) == -1)
+      {
+        EBP();
+      }
 
       char dev_name[256] = {};
       if (ioctl(dev_fd, EVIOCGNAME(sizeof(dev_name)), dev_name) == -1)
@@ -350,10 +364,41 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
         dev_type = EVDEV_TYPE_KEYBOARD;
         printf("found keyboard: %s\n", dev_name);
       }
+      if (EVDEV_BITFIELD_TEST(dev_sw_capabilities, SW_HEADPHONE_INSERT))
+      {
+        // headphone
+        // only through usb?
+        // alsa for jack plug
+      }
       if (EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_GAMEPAD))
       {
         dev_type = EVDEV_TYPE_GAMEPAD;
         printf("found gamepad: %s\n", dev_name);
+        // NOTE(Ryan): Gain is different across devices, so standardise.
+        struct input_event gain = {};
+        gain.type = EV_FF;
+        gain.code = FF_GAIN;
+        int percent75 = 0xC000;
+        gain.value = percent75;
+        if (write(dev_fd, &gain, sizeof(gain)) != sizeof(gain))
+        {
+          EBP();
+        }
+        // upload effect
+        struct ff_effect rumble_effect = {};
+        rumble_effect.type = FF_RUMBLE;
+        rumble_effect.id = -1;
+	      rumble_effect.u.rumble.strong_magnitude = 0;
+	      rumble_effect.u.rumble.weak_magnitude = 0xC000;
+	      rumble_effect.replay.length = 5000;
+	      rumble_effect.replay.delay = 0;
+
+        // play effect
+        int vibration_num_times = 1;
+        play.type = EV_FF;
+        play.code = rumble_effect.id;
+        play.value = vibration_num_times;
+        write(dev_fd, (const void *)&play_vibration, sizeof(play_vibration));
       }
       if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REL) &&
           EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_X) && 
@@ -537,16 +582,35 @@ main(int argc, char *argv[])
       }
       for (uint event_i = 0; event_i < len / sizeof(events[0]); ++event_i)
       {
-        switch (events[event_i].type)
+        int type = events[event_i].type;
+        int code = events[event_i].code;
+        int value = events[event_i].value;
+
+        bool is_released = (type == EV_KEY ? !value : false);
+
+        if (device_type == EVDEV_DEVICE_TYPE_GAMEPAD)
         {
-          case EV_KEY:
+          bool up = (code == BTN_DPAD_UP);
+          bool right = (code == BTN_DPAD_RIGHT);
+          bool left = (code == BTN_DPAD_LEFT);
+          bool down = (code == BTN_DPAD_DOWN);
+          bool select = (code == BTN_SELECT);
+          bool start = (code == BTN_START);
+          bool home = (code == BTN_MODE);
+          bool left_shoulder = (code == BTN_TL);
+          bool right_shoulder = (code == BTN_TR);
+          bool north = (code == BTN_NORTH);
+          bool east = (code == BTN_EAST);
+          bool south = (code == BTN_SOUTH);
+          bool west = (code == BTN_WEST);
+
+          int stick_x = (code == ABS_X ? value : 0);
+          int stick_y = (code == ABS_Y ? value : 0);
+
+          if (south)
           {
-            if (events[event_i].code == KEY_W)
-            {
-              puts("entered W");
-            }
-            bool is_released = (events[event_i].value == 0);
-          } break;
+            // FF_PERIODIC --> FF_SINE
+          }
         }
       }
     }
