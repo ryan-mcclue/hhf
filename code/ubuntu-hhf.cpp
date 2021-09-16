@@ -32,14 +32,14 @@ enum EVDEV_DEVICE_TYPE
   EVDEV_DEVICE_TYPE_MOUSE,
 };
 #define RLIMIT_NOFILE 1024
-#define EVDEV_GAMEPAD_RUMBLE_ID -1
+#define EVDEV_GAMEPAD_RUMBLE_ID -1 
+#define EPOLL_EVDEV_MAX_EVENTS 5
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/Xrender.h>
 
-#include <string_view>
 #include <cstdio>
 #include <cstring> 
 #include <cerrno>
@@ -328,11 +328,22 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
         struct ff_effect rumble_effect = {};
         rumble_effect.type = FF_RUMBLE;
         rumble_effect.id = EVDEV_GAMEPAD_RUMBLE_ID;
-	      rumble_effect.u.rumble.strong_magnitude = 0;
-	      rumble_effect.u.rumble.weak_magnitude = 0xC000;
-	      rumble_effect.replay.length = 1000;
-	      rumble_effect.replay.delay = 0;
+	      rumble_effect.u.rumble.strong_magnitude = 0x8000;
+	      rumble_effect.u.rumble.weak_magnitude = 0;
+	      rumble_effect.replay.length = 5000;
+	      rumble_effect.replay.delay = 1000;
         if (ioctl(dev_fd, EVIOCSFF, &rumble_effect) == -1)
+        {
+          EBP();
+        }
+
+        // TODO(Ryan): Rumble does not work?
+        int rumble_num_times = 1;
+        struct input_event play_rumble = {};
+        play_rumble.type = EV_FF;
+        play_rumble.code = EVDEV_GAMEPAD_RUMBLE_ID; 
+        play_rumble.value = rumble_num_times;
+        if (write(dev_fd, (const void *)&play_rumble, sizeof(play_rumble)) == -1)
         {
           EBP();
         }
@@ -442,13 +453,13 @@ main(int argc, char *argv[])
                                                             xlib_visual_info, 1280, 720);
 
   EVDEV_DEVICE_TYPE evdev_devices[RLIMIT_NOFILE] = {};
-  int epoll_fd = epoll_create1(0);
-  evdev_populate_devices(epoll_fd, evdev_devices);
+  int epoll_evdev_fd = epoll_create1(0);
+  evdev_populate_devices(epoll_evdev_fd, evdev_devices);
 
   // NOTE(Ryan): Sound devices picked up with mixer events
 
   bool want_to_run = true;
-  int x_offset = 0;
+  int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
     XEvent xlib_event = {};
@@ -480,100 +491,93 @@ main(int argc, char *argv[])
     XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
     if (xlib_focused_window == xlib_window)
     {
-      // process input
-    }
-
-#if 0
-#define MAX_EVENTS 5
-#define TIMEOUT_MS 1
-    struct epoll_event epoll_evdev_device_events[MAX_EVENTS] = {0};
-    int num_epoll_evdev_input_device_events = 0;
-    // TODO(Ryan): Should we poll this more frequently?
-    num_epoll_evdev_input_device_events = epoll_wait(epoll_evdev_input_device_fd, 
-                                        epoll_evdev_input_device_events, 
-                                        MAX_EVENTS, TIMEOUT_MS);
-    for (uint epoll_event = 0;
-        evdev_epoll_event < num_evdev_epoll_events; 
-        ++evdev_epoll_event)
-    {
-      int device_fd = evdev_epoll_events[evdev_epoll_event].data.fd;
-      evdev_device_b device = evdev_input_devices[device_fd];
-      EVDEV_DEVICE_TYPE device_type = EVDEV_DEVICE_GET_TYPE(device);
-
-      struct input_event events[32] = {0};
-      int len = read(evdev_epoll_events[evdev_epoll_event].data.fd, 
-                     events, sizeof(events));
-      if (len == -1)
+      struct epoll_event epoll_evdev_events[EPOLL_EVDEV_MAX_EVENTS] = {0};
+      int timeout_ms = 1;
+      // TODO(Ryan): Should we poll this more frequently?
+      int num_epoll_evdev_events = epoll_wait(epoll_evdev_fd, epoll_evdev_events, 
+                                              EPOLL_EVDEV_MAX_EVENTS, timeout_ms);
+      for (int epoll_evdev_event_i = 0;
+          epoll_evdev_event_i < num_epoll_evdev_events; 
+          ++epoll_evdev_event_i)
       {
-        // TODO(EHANDLING | ELOGGING: Ryan)
-        EBP();
-      }
-      for (uint event_i = 0; event_i < len / sizeof(events[0]); ++event_i)
-      {
-        int type = events[event_i].type;
-        int code = events[event_i].code;
-        int value = events[event_i].value;
+        int dev_fd = epoll_evdev_events[epoll_evdev_event_i].data.fd;
+        EVDEV_DEVICE_TYPE dev_type = evdev_devices[dev_fd];
 
-        // TODO(Ryan): Clarify here
-        // we want a was_down, is_down
-        bool is_released = (type == EV_KEY ? !value : false);
-
-        if (device_type == EVDEV_DEVICE_TYPE_GAMEPAD)
+        struct input_event dev_events[32] = {0};
+        int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
+        if (dev_event_bytes_read == -1)
         {
-          bool up = (code == BTN_DPAD_UP);
-          bool right = (code == BTN_DPAD_RIGHT);
-          bool left = (code == BTN_DPAD_LEFT);
-          bool down = (code == BTN_DPAD_DOWN);
-          bool select = (code == BTN_SELECT);
-          bool start = (code == BTN_START);
-          bool home = (code == BTN_MODE);
-          bool left_shoulder = (code == BTN_TL);
-          bool right_shoulder = (code == BTN_TR);
-          bool north = (code == BTN_NORTH);
-          bool east = (code == BTN_EAST);
-          bool south = (code == BTN_SOUTH);
-          bool west = (code == BTN_WEST);
+          // TODO(Ryan): Logging
+          EBP();
+        }
+        int num_dev_events = dev_event_bytes_read / sizeof(dev_events[0]); 
+        for (int dev_event_i = 0; dev_event_i < num_dev_events; ++dev_event_i)
+        {
+          int dev_event_type = dev_events[dev_event_i].type;
+          int dev_event_code = dev_events[dev_event_i].code;
+          int dev_event_value = dev_events[dev_event_i].value;
 
-          int stick_x = (code == ABS_X ? value : 0);
-          int stick_y = (code == ABS_Y ? value : 0);
+          bool is_released = (dev_event_type == EV_KEY ? !dev_event_value : false);
 
-          if (south)
+          if (dev_type == EVDEV_DEVICE_TYPE_GAMEPAD)
           {
-            // FF_PERIODIC --> FF_SINE
-            // play effect
-            int vibration_num_times = 1;
-            struct input_event play_rumble = {};
-            play_rumble.type = EV_FF;
-            play_rumble.code = EVDEV_GAMEPAD_RUMBLE_ID; 
-            play_rumble.value = vibration_num_times;
-            if (write(dev_fd, (const void *)&play_vibration, sizeof(play_vibration) == -1)
+            bool up = (dev_event_code == BTN_DPAD_UP);
+            bool right = (dev_event_code == BTN_DPAD_RIGHT);
+            bool left = (dev_event_code == BTN_DPAD_LEFT);
+            bool down = (dev_event_code == BTN_DPAD_DOWN);
+            bool select = (dev_event_code == BTN_SELECT);
+            bool start = (dev_event_code == BTN_START);
+            bool home = (dev_event_code == BTN_MODE);
+            bool left_shoulder = (dev_event_code == BTN_TL);
+            bool right_shoulder = (dev_event_code == BTN_TR);
+            bool north = (dev_event_code == BTN_NORTH);
+            bool east = (dev_event_code == BTN_EAST);
+            bool south = (dev_event_code == BTN_SOUTH);
+            bool west = (dev_event_code == BTN_WEST);
+
+            int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
+            int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
+
+            x_offset += stick_x >> 12;
+            y_offset += stick_y >> 12;
+          }
+
+          if (dev_type == EVDEV_DEVICE_TYPE_KEYBOARD)
+          {
+            bool w = (dev_event_code == KEY_W);
+            bool a = (dev_event_code == KEY_A);
+            bool s = (dev_event_code == KEY_S);
+            bool d = (dev_event_code == KEY_D);
+            bool q = (dev_event_code == KEY_Q);
+            bool e = (dev_event_code == KEY_E);
+            bool up = (dev_event_code == KEY_UP);
+            bool down = (dev_event_code == KEY_DOWN);
+            bool left = (dev_event_code == KEY_LEFT);
+            bool right = (dev_event_code == KEY_RIGHT);
+            bool escape = (dev_event_code == KEY_ESC);
+            bool space = (dev_event_code == KEY_SPACE);
+            bool enter = (dev_event_code == KEY_ENTER);
+
+            if (w)
             {
-              EBP();
+              printf("w: ");
+              if (is_released) 
+              {
+                printf("was_released");
+              }
+              else
+              {
+                printf("is_down");
+              }
+              printf("\n");
+              fflush(stdout);
             }
           }
         }
-
-        if (device_type == EVDEV_DEVICE_TYPE_KEYBOARD)
-        {
-          bool w = (code == KEY_W);
-          bool a = (code == KEY_A);
-          bool s = (code == KEY_S);
-          bool d = (code == KEY_D);
-          bool q = (code == KEY_Q);
-          bool e = (code == KEY_E);
-          bool up = (code == KEY_UP);
-          bool down = (code == KEY_DOWN);
-          bool left = (code == KEY_LEFT);
-          bool right = (code == KEY_RIGHT);
-          bool escape = (code == KEY_ESC);
-          bool space = (code == KEY_SPACE);
-          bool enter = (code == KEY_ENTER);
-        }
+      }
     }
-#endif
 
-    render_weird_gradient(xlib_back_buffer, x_offset, 0);
-    x_offset++;
+    render_weird_gradient(xlib_back_buffer, x_offset, y_offset);
 
     xlib_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
                              xlib_gc, xlib_back_buffer, xlib_window_width, 
