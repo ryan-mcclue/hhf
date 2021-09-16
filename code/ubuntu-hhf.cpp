@@ -9,15 +9,6 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 #include <unistd.h>
-#include <dirent.h>
-struct LinuxDirent64
-{
-  ino64_t d_ino;
-  off64_t d_off;
-  unsigned short d_reclen;
-  unsigned char  d_type;
-  char d_name[];
-};
 #include <linux/netlink.h>
 #define NETLINK_MAX_PAYLOAD 8192
 union UeventBuffer
@@ -41,11 +32,7 @@ enum EVDEV_DEVICE_TYPE
   EVDEV_DEVICE_TYPE_MOUSE,
 };
 #define RLIMIT_NOFILE 1024
-struct EvdevDevice
-{
-  EVDEV_DEVICE_TYPE type;
-  int event_id;
-};
+#define EVDEV_GAMEPAD_RUMBLE_ID -1
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -200,8 +187,9 @@ render_weird_gradient(XlibBackBuffer back_buffer, int x_offset, int y_offset)
   }
 }
 
+/*
 INTERNAL int
-evdev_create_input_device_monitor(void)
+create_uevent_socket(void)
 {
   int uevent_socket = socket(PF_NETLINK, SOCK_RAW | SOCK_NONBLOCK, NETLINK_KOBJECT_UEVENT);
   if (uevent_socket == -1)
@@ -233,7 +221,7 @@ evdev_create_input_device_monitor(void)
 }
 
 INTERNAL void
-uevent_monitor_evdev_input_devices(int monitor, evdev_device_b devices[RLIMIT_NOFILE])
+poll_uevent_socket_for_evdev_devices(int monitor, evdev_device_b devices[RLIMIT_NOFILE])
 {
     int uevent_bytes_received = recvmsg(uevent_socket, &uevent_msg, 0); 
     if (uevent_bytes_received == -1 && errno != EWOULDBLOCK)
@@ -275,42 +263,17 @@ uevent_monitor_evdev_input_devices(int monitor, evdev_device_b devices[RLIMIT_NO
       printf("%s\n", uevent_buffer_str);
     }
 }
+*/
 
 INTERNAL void 
-evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFILE])
+evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
 {
-  // TODO(Ryan): 
-  // easier to loop over "/dev/input/event%d" and check if exists
-
-  int input_fd = open("/dev/input", O_RDONLY | O_DIRECTORY);
-  if (input_fd == -1)
+  char dev_path[64] = {};
+  for (int ev_id = 0; ev_id < 64; ++ev_id)
   {
-    EBP();
-  }
-  char input_dirent_buf[1024] = {};
-  int input_dirent_bytes_read = 0, total_input_dirent_bytes_read = 0;
-  do
-  {
-    input_dirent_bytes_read = getdents64(input_fd, input_dirent_buf, 
-                                         sizeof(input_dirent_buf));
-    if (input_dirent_bytes_read == -1)
+    sprintf(dev_path, "/dev/input/event%d", ev_id);
+    if (access(dev_path, F_OK) == 0)
     {
-      EBP();
-    }
-    total_input_dirent_bytes_read += input_dirent_bytes_read;
-  } while (input_dirent_bytes_read != 0);
-
-  int input_dirent_cursor = 0;
-  while (input_dirent_cursor < total_input_dirent_bytes_read)
-  {
-    LinuxDirent64 *input_dirent = (LinuxDirent64 *)
-                                  (input_dirent_buf + input_dirent_cursor);
-    if (strncmp(input_dirent->d_name, "event", 5) == 0)
-    {
-      char dev_path[128] = {};
-      strcpy(dev_path, "/dev/input/");
-      strcat(dev_path, input_dirent->d_name);
-
       int dev_fd = open(dev_path, O_RDWR);
       if (dev_fd == -1)
       {
@@ -318,33 +281,15 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
       }
 
       unsigned long dev_ev_capabilities[EVDEV_BITFIELD_LEN(EV_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(0, EV_CNT), dev_ev_capabilities) == -1)
-      {
-        EBP();
-      }
       unsigned long dev_key_capabilities[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilities) == -1)
-      {
-        EBP();
-      }
       unsigned long dev_abs_capabilities[EVDEV_BITFIELD_LEN(ABS_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_ABS, ABS_CNT), dev_abs_capabilities) == -1)
-      {
-        EBP();
-      }
       unsigned long dev_rel_capabilities[EVDEV_BITFIELD_LEN(REL_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_REL, REL_CNT), dev_rel_capabilities) == -1)
-      {
-        EBP();
-      }
-      // ioctl(fd, EVIOCGEFFECTS, &num_simultaneous_effects)
       unsigned long dev_ff_capabilities[EVDEV_BITFIELD_LEN(FF_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1)
-      {
-        EBP();
-      }
-      unsigned long dev_sw_capabilities[EVDEV_BITFIELD_LEN(SW_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(EV_SW, SW_CNT), dev_sw_capabilities) == -1)
+      if (ioctl(dev_fd, EVIOCGBIT(0, EV_CNT), dev_ev_capabilities) == -1 ||
+          ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilities) == -1 ||
+          ioctl(dev_fd, EVIOCGBIT(EV_ABS, ABS_CNT), dev_abs_capabilities) == -1 ||
+          ioctl(dev_fd, EVIOCGBIT(EV_REL, REL_CNT), dev_rel_capabilities) == -1 ||
+          ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1)
       {
         EBP();
       }
@@ -355,57 +300,50 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
         EBP();
       }
 
-      EVDEV_DEVICE_TYPE dev_type = EVDEV_TYPE_IGNORE;
+      EVDEV_DEVICE_TYPE dev_type = EVDEV_DEVICE_TYPE_IGNORE;
 
       unsigned long esc_keys_letters_mask = 0xfffffffe;
       if ((dev_key_capabilities[0] & esc_keys_letters_mask) != 0 &&
            EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REP))
       {
-        dev_type = EVDEV_TYPE_KEYBOARD;
+        dev_type = EVDEV_DEVICE_TYPE_KEYBOARD;
         printf("found keyboard: %s\n", dev_name);
-      }
-      if (EVDEV_BITFIELD_TEST(dev_sw_capabilities, SW_HEADPHONE_INSERT))
-      {
-        // headphone
-        // only through usb?
-        // alsa for jack plug
       }
       if (EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_GAMEPAD))
       {
-        dev_type = EVDEV_TYPE_GAMEPAD;
+        dev_type = EVDEV_DEVICE_TYPE_GAMEPAD;
         printf("found gamepad: %s\n", dev_name);
-        // NOTE(Ryan): Gain is different across devices, so standardise.
+
+        // NOTE(Ryan): Standardize gain across different devices.
         struct input_event gain = {};
         gain.type = EV_FF;
         gain.code = FF_GAIN;
         int percent75 = 0xC000;
         gain.value = percent75;
-        if (write(dev_fd, &gain, sizeof(gain)) != sizeof(gain))
+        if (write(dev_fd, &gain, sizeof(gain)) == -1)
         {
           EBP();
         }
-        // upload effect
+
         struct ff_effect rumble_effect = {};
         rumble_effect.type = FF_RUMBLE;
-        rumble_effect.id = -1;
+        rumble_effect.id = EVDEV_GAMEPAD_RUMBLE_ID;
 	      rumble_effect.u.rumble.strong_magnitude = 0;
 	      rumble_effect.u.rumble.weak_magnitude = 0xC000;
-	      rumble_effect.replay.length = 5000;
+	      rumble_effect.replay.length = 1000;
 	      rumble_effect.replay.delay = 0;
+        if (ioctl(dev_fd, EVIOCSFF, &rumble_effect) == -1)
+        {
+          EBP();
+        }
 
-        // play effect
-        int vibration_num_times = 1;
-        play.type = EV_FF;
-        play.code = rumble_effect.id;
-        play.value = vibration_num_times;
-        write(dev_fd, (const void *)&play_vibration, sizeof(play_vibration));
       }
       if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REL) &&
           EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_X) && 
           EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_Y) &&
           EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_MOUSE))
       {
-        dev_type = EVDEV_TYPE_MOUSE;
+        dev_type = EVDEV_DEVICE_TYPE_MOUSE;
         printf("found mouse: %s\n", dev_name);
       }
 
@@ -414,29 +352,24 @@ evdev_populate_input_devices(int epoll_fd, EvdevDevice input_devices[RLIMIT_NOFI
           EVDEV_BITFIELD_TEST(dev_abs_capabilities, ABS_Y) &&
           EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_TOOL_FINGER))
       {
-        dev_type = EVDEV_TYPE_MOUSE;
+        dev_type = EVDEV_DEVICE_TYPE_MOUSE;
         printf("found touchpad: %s\n", dev_name);
       }
 
-      if (dev_type != EVDEV_TYPE_IGNORE)
+      if (dev_type != EVDEV_DEVICE_TYPE_IGNORE)
       {
-        struct epoll_event event = {}; 
+        struct epoll_event event = {};
         event.events = EPOLLIN;
         event.data.fd = dev_fd;
         epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
-        // lower 16 event_id, upper 16 device_type
-        input_devices[dev_fd] = dev_type;
+        devices[dev_fd] = dev_type;
       }
       else
       {
         close(dev_fd);
       }
     }
-
-    input_dirent_cursor += input_dirent->d_reclen;
   }
-
-  close(input_fd);
 }
 
 int
@@ -482,13 +415,7 @@ main(int argc, char *argv[])
       xlib_window_border_width, xlib_visual_info.depth, InputOutput,
       xlib_visual_info.visual, attribute_mask, &xlib_window_attr);
 
-  std::string_view xlib_window_name {"HHF"};
-  int xlib_window_name_property_granularity = 8;
-  XChangeProperty(xlib_display, xlib_window, XA_WM_NAME, XA_STRING, 
-      xlib_window_name_property_granularity, PropModeReplace, 
-      (const unsigned char *)xlib_window_name.data(), 
-      xlib_window_name.length());
-
+  XStoreName(xlib_display, xlib_window, "HHF");
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
@@ -500,16 +427,11 @@ main(int argc, char *argv[])
     // TODO(Ryan): Error logging
     BP();
   }
-  Atom xlib_wm_atom = XInternAtom(xlib_display, "WM_PROTOCOLS", False);
-  if (xlib_wm_atom == None)
+  if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False)
   {
     // TODO(Ryan): Error logging
     BP();
   }
-  int xlib_window_protocols_property_granularity = 32;
-  XChangeProperty(xlib_display, xlib_window, xlib_wm_atom, XA_ATOM, 
-      xlib_window_protocols_property_granularity, PropModeReplace, 
-      (unsigned char *)&xlib_wm_delete_atom, 1);
 
   XRenderPictFormat *xrender_pic_format = XRenderFindVisualFormat(xlib_display, 
                                                                xlib_visual_info.visual);
@@ -519,11 +441,9 @@ main(int argc, char *argv[])
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
 
-  EvdevDevice evdev_input_devices[RLIMIT_NOFILE] = {};
+  EVDEV_DEVICE_TYPE evdev_devices[RLIMIT_NOFILE] = {};
   int epoll_fd = epoll_create1(0);
-  evdev_populate_input_devices(epoll_fd, evdev_input_devices);
-
-  int uevent_monitor = uevent_create_monitor();
+  evdev_populate_devices(epoll_fd, evdev_devices);
 
   // NOTE(Ryan): Sound devices picked up with mixer events
 
@@ -554,11 +474,19 @@ main(int argc, char *argv[])
       }
     }
 
-    uevent_monitor_evdev_input_devices(uevent_socket, evdev_input_devices);
+    // TODO(Ryan): Investigate using _NET_ACTIVE_WINDOW atom
+    Window xlib_focused_window = 0;
+    int xlib_focused_window_state = 0;
+    XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
+    if (xlib_focused_window == xlib_window)
+    {
+      // process input
+    }
 
+#if 0
 #define MAX_EVENTS 5
 #define TIMEOUT_MS 1
-    struct epoll_event epoll_evdev_input_device_events[MAX_EVENTS] = {0};
+    struct epoll_event epoll_evdev_device_events[MAX_EVENTS] = {0};
     int num_epoll_evdev_input_device_events = 0;
     // TODO(Ryan): Should we poll this more frequently?
     num_epoll_evdev_input_device_events = epoll_wait(epoll_evdev_input_device_fd, 
@@ -586,6 +514,8 @@ main(int argc, char *argv[])
         int code = events[event_i].code;
         int value = events[event_i].value;
 
+        // TODO(Ryan): Clarify here
+        // we want a was_down, is_down
         bool is_released = (type == EV_KEY ? !value : false);
 
         if (device_type == EVDEV_DEVICE_TYPE_GAMEPAD)
@@ -610,10 +540,37 @@ main(int argc, char *argv[])
           if (south)
           {
             // FF_PERIODIC --> FF_SINE
+            // play effect
+            int vibration_num_times = 1;
+            struct input_event play_rumble = {};
+            play_rumble.type = EV_FF;
+            play_rumble.code = EVDEV_GAMEPAD_RUMBLE_ID; 
+            play_rumble.value = vibration_num_times;
+            if (write(dev_fd, (const void *)&play_vibration, sizeof(play_vibration) == -1)
+            {
+              EBP();
+            }
           }
         }
-      }
+
+        if (device_type == EVDEV_DEVICE_TYPE_KEYBOARD)
+        {
+          bool w = (code == KEY_W);
+          bool a = (code == KEY_A);
+          bool s = (code == KEY_S);
+          bool d = (code == KEY_D);
+          bool q = (code == KEY_Q);
+          bool e = (code == KEY_E);
+          bool up = (code == KEY_UP);
+          bool down = (code == KEY_DOWN);
+          bool left = (code == KEY_LEFT);
+          bool right = (code == KEY_RIGHT);
+          bool escape = (code == KEY_ESC);
+          bool space = (code == KEY_SPACE);
+          bool enter = (code == KEY_ENTER);
+        }
     }
+#endif
 
     render_weird_gradient(xlib_back_buffer, x_offset, 0);
     x_offset++;
