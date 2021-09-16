@@ -3,7 +3,7 @@
 
 glibc_debugging="libc6-dbg glibc-source"
 
-device_debugging="evtest udevadm"
+device_debugging="evtest udevadm fftest"
 
 essential="libx11-dev libxrender-dev"
 

@@ -410,20 +410,82 @@ alsa_init(void)
        hw_param_mask_i <= SNDRV_PCM_HW_PARAM_LAST_MASK; 
        ++hw_param_mask_i) 
   {
-        snd_mask_t *mask = hw_params.masks[hw_param_mask_i - SNDRV_PCM_HW_PARAM_FIRST_MASK];
-        memset(mask, 0xff, sizeof(*mask));
-        params->cmask |= 1 << k;
-        params->rmask |= 1 << k;
-    }
-    for (k = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL;
-         k <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; k++)
-    {
-        _snd_pcm_hw_param_any(params, k);
-    }
-    params->rmask = ~0U;
-    params->cmask = 0;
-    params->info = ~0U;
-    ioctl(snd_fd, SNDRV_PCM_IOCTL_HW_REFINE, params);
+    snd_mask *mask = &hw_params.masks[hw_param_mask_i - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+    memset(mask, 0xff, sizeof(*mask));
+
+    hw_params.cmask |= 1 << hw_param_mask_i;
+    hw_params.rmask |= 1 << hw_param_mask_i;
+  }
+  for (int hw_param_interval_i = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL;
+       hw_param_interval_i <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; 
+       hw_param_interval_i++)
+  {
+    snd_interval *interval = &hw_params.intervals[hw_param_interval_i - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+    memset(interval, 0x00, sizeof(*interval));
+    // or UINT_MAX;
+    interval->max = -1;
+
+    hw_params.cmask |= 1 << hw_param_interval_i;
+    hw_params.rmask |= 1 << hw_param_interval_i;
+  }
+  hw_params.rmask = ~0U;
+  hw_params.cmask = 0;
+  hw_params.info = ~0U;
+
+  if (ioctl(pcm_fd, SNDRV_PCM_IOCTL_HW_REFINE, &hw_params) == -1)
+  {
+    EBP();
+  }
+
+  int access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
+  snd_mask *mask = &hw_params.masks[SNDRV_PCM_HW_PARAM_ACCESS - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+
+  int mask_index = access / sizeof(hw_params.masks[0].bits[0]);
+  int mask_offset = access % sizeof(hw_params.masks[0].bits[0]);
+  int mask_num_bits = sizeof(mask->bits) / sizeof(mask->bits[0]);
+  for (int i = 0; i < mask_num_bits; ++i)
+  {
+    mask->bits[i] = 0x00;
+  }
+  mask->bits[mask_index] &= ~(1 << mask_offset);
+  mask->bits[mask_index] |= (1 << mask_offset);
+  hw_params.rmask |= (1 << SNDRV_PCM_HW_PARAM_ACCESS);
+  // call IOCTL_HW_REFINE again?
+
+  int format = SNDRV_PCM_FORMAT_S16_LE;
+  SNDDRV_PCM_HW_PARAM_FORMAT;
+  //snd_pcm_hw_params_set_format(snd_fd, hwparams, SND_PCM_FORMAT_S16_LE);
+
+  // 
+  // more configuring here
+  // ...
+
+  // TODO(Ryan): Investigate altering software params to prepare buffer with frames to
+  // avoid overrun
+
+  //  write_audio(buf, num_);  
+  
+//void alsa_audio_write_s16(void *ao, int16_t *buf, uint32_t bufsize)
+//{
+//    struct snd_xferi xferi;
+//    int snd_fd = (int)((size_t)ao);
+//	unsigned int i, j;
+//    short outbuf[16384];
+//    for(i=0; i<bufsize; i++) {
+//        outbuf[2*i] = buf[i];
+//        outbuf[2*i+1] = buf[i];
+//    }
+//    xferi.result = 0;
+//    xferi.buf = (char*) outbuf;
+//    xferi.frames = bufsize;
+//    j = ioctl(snd_fd, SNDRV_PCM_IOCTL_WRITEI_FRAMES, &xferi);
+//	if (j >= 0) {
+//		j = xferi.result;
+//	}
+//    if(j == -32) { //-EPIPE 
+//        ioctl(snd_fd, SNDRV_PCM_IOCTL_PREPARE);
+//    }
+//}
 }
 
 int
