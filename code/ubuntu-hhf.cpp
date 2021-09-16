@@ -34,6 +34,7 @@ enum EVDEV_DEVICE_TYPE
 #define RLIMIT_NOFILE 1024
 #define EVDEV_GAMEPAD_RUMBLE_ID -1 
 #define EPOLL_EVDEV_MAX_EVENTS 5
+#include <sound/asound.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -49,6 +50,9 @@ enum EVDEV_DEVICE_TYPE
 
 typedef uint8_t u8;
 typedef uint32_t u32;
+// NOTE(Ryan): This is to avoid compiler adjusting a value like 1234 to 1 which it
+//             would have to do if assigning to a bool.
+typedef u32 b32;
 
 struct XlibBackBuffer
 {
@@ -220,6 +224,8 @@ create_uevent_socket(void)
   return uevent_socket;
 }
 
+// IMPORTANT(Ryan): This will become more useful when optimising, e.g. removing
+// fd from epoll when disconnected
 INTERNAL void
 poll_uevent_socket_for_evdev_devices(int monitor, evdev_device_b devices[RLIMIT_NOFILE])
 {
@@ -383,6 +389,43 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
   }
 }
 
+INTERNAL void
+alsa_init(void)
+{
+  int pcm_fd = open("/dev/snd/pcmC0D0p", O_WRONLY);
+  if (pcm_fd == -1)
+  {
+    EBP();
+  }
+
+  // 48k samples per second
+  // write sound slightly ahead of play cursor
+
+  // hardware parameters
+  int frame_size = 1024;
+  int num_channels = 2;
+  int sample_rate = 48000; 
+  snd_pcm_hw_params hw_params = {};
+  for (int hw_param_mask_i = SNDRV_PCM_HW_PARAM_FIRST_MASK;
+       hw_param_mask_i <= SNDRV_PCM_HW_PARAM_LAST_MASK; 
+       ++hw_param_mask_i) 
+  {
+        snd_mask_t *mask = hw_params.masks[hw_param_mask_i - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+        memset(mask, 0xff, sizeof(*mask));
+        params->cmask |= 1 << k;
+        params->rmask |= 1 << k;
+    }
+    for (k = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL;
+         k <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; k++)
+    {
+        _snd_pcm_hw_param_any(params, k);
+    }
+    params->rmask = ~0U;
+    params->cmask = 0;
+    params->info = ~0U;
+    ioctl(snd_fd, SNDRV_PCM_IOCTL_HW_REFINE, params);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -457,6 +500,8 @@ main(int argc, char *argv[])
   evdev_populate_devices(epoll_evdev_fd, evdev_devices);
 
   // NOTE(Ryan): Sound devices picked up with mixer events
+  alsa_init();
+
 
   bool want_to_run = true;
   int x_offset = 0, y_offset = 0;
@@ -517,7 +562,9 @@ main(int argc, char *argv[])
           int dev_event_code = dev_events[dev_event_i].code;
           int dev_event_value = dev_events[dev_event_i].value;
 
-          bool is_released = (dev_event_type == EV_KEY ? !dev_event_value : false);
+          bool is_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
+          bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
+          bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
           if (dev_type == EVDEV_DEVICE_TYPE_GAMEPAD)
           {
@@ -557,10 +604,11 @@ main(int argc, char *argv[])
             bool escape = (dev_event_code == KEY_ESC);
             bool space = (dev_event_code == KEY_SPACE);
             bool enter = (dev_event_code == KEY_ENTER);
+            bool ctrl = (dev_event_code == KEY_LEFTCTRL);
 
-            if (w)
+            if (a && !was_down)
             {
-              printf("w: ");
+              printf("a: ");
               if (is_released) 
               {
                 printf("was_released");
