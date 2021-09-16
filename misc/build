@@ -7,7 +7,7 @@ intel_vtune="$HOME/intel/oneapi/vtune/2021.6.0/sdk"
 intel_vtune_flags="-I ${intel_vtune}/include -L ${intel_vtune}/lib64"
 
 common_flags='-fno-exceptions -fno-rtti -std=c++2a'
-dev_flags="-g -Wall -DHHF_DEV"
+dev_flags="-g -Wall -DHHF_DEV -Wno-unused-variable"
 
 libraries="-lX11 -lXrender"
 

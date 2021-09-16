@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: zlib-acknowledgement 
+
+glibc_debugging="libc6-dbg glibc-source"
+
+device_debugging="evtest udevadm"
+
+essential="libx11-dev libxrender-dev"
+
+sudo apt install $essential
