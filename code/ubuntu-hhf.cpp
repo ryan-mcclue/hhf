@@ -392,7 +392,10 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
 INTERNAL void
 alsa_init(void)
 {
-  int pcm_fd = open("/dev/snd/pcmC0D0p", O_WRONLY);
+  // we are copying to kernel buffer which then gets copied to device
+  // may get single-threaded overrun as copying to device will start immediately
+  // getting errors using software parameters to fill this and manually start
+  int pcm_fd = open("/dev/snd/pcmC0D0p", 0);
   if (pcm_fd == -1)
   {
     EBP();
