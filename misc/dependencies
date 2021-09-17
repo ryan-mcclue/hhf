@@ -8,3 +8,9 @@ device_debugging="evtest udevadm fftest"
 essential="libx11-dev libxrender-dev"
 
 sudo apt install $essential
+
+member_of_input="$(id -nG "$USER" | grep "input")"
+if test ! "$member_of_input"; then
+  usermod -a "$USER" -G input
+  printf "\n\nMust log out and log back in for user to access evdev\n"
+fi

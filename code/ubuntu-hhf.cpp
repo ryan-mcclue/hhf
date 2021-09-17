@@ -291,11 +291,13 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
       unsigned long dev_abs_capabilities[EVDEV_BITFIELD_LEN(ABS_CNT)] = {};
       unsigned long dev_rel_capabilities[EVDEV_BITFIELD_LEN(REL_CNT)] = {};
       unsigned long dev_ff_capabilities[EVDEV_BITFIELD_LEN(FF_CNT)] = {};
+      unsigned long dev_sw_capabilities[EVDEV_BITFIELD_LEN(SW_CNT)] = {};
       if (ioctl(dev_fd, EVIOCGBIT(0, EV_CNT), dev_ev_capabilities) == -1 ||
           ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilities) == -1 ||
           ioctl(dev_fd, EVIOCGBIT(EV_ABS, ABS_CNT), dev_abs_capabilities) == -1 ||
           ioctl(dev_fd, EVIOCGBIT(EV_REL, REL_CNT), dev_rel_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1)
+          ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1 ||
+          ioctl(dev_fd, EVIOCGBIT(EV_SW, SW_CNT), dev_sw_capabilities) == -1)
       {
         EBP();
       }
@@ -314,6 +316,10 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
       {
         dev_type = EVDEV_DEVICE_TYPE_KEYBOARD;
         printf("found keyboard: %s\n", dev_name);
+      }
+      if (EVDEV_BITFIELD_TEST(dev_sw_capabilities, SW_HEADPHONE_INSERT))
+      {
+        printf("found headphone: %s\n", dev_name);
       }
       if (EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_GAMEPAD))
       {
@@ -392,71 +398,108 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
 INTERNAL void
 alsa_init(void)
 {
+  int ctl_fd = 0;
+  char ctl_path[64] = {};
+  for (int card_i = 0; card_i < 4; ++card_i)
+  {
+    sprintf(ctl_path, "/dev/snd/controlC%d", card_i);
+    if (access(ctl_path, F_OK) == 0)
+    {
+      ctl_fd = open(ctl_path, O_RDONLY); 
+      if (ctl_fd == -1)
+      {
+        EBP();
+      }
+
+      snd_ctl_card_info card_info = {};
+      if (ioctl(ctl_fd, SNDRV_CTL_IOCTL_CARD_INFO, &card_info) == -1)
+      {
+        EBP();
+      }
+
+      // cards aren't added in a sequential fashion, e.g. /dev/snd/pcmC0D3p could be first
+      // so may have to enumerate
+      printf("card: %d\n", card_info.card);
+      printf("driver: %s\n", card_info.driver);
+      printf("mixername (codec): %s\n", card_info.mixername);
+
+      
+    }
+  }
+
+
+
+  // alsa-kernel and alsa-lib
+
+  // /dev/snd/controlC0 can subscribe to events and can search for pcm devices
+
+
   // we are copying to kernel buffer which then gets copied to device
   // may get single-threaded overrun as copying to device will start immediately
   // getting errors using software parameters to fill this and manually start
-  int pcm_fd = open("/dev/snd/pcmC0D0p", 0);
-  if (pcm_fd == -1)
-  {
-    EBP();
-  }
+  //int pcm_fd = open("/dev/snd/pcmC0D0p", 0);
+  //if (pcm_fd == -1)
+  //{
+  //  EBP();
+  //}
 
-  // 48k samples per second
-  // write sound slightly ahead of play cursor
+  //// 48k samples per second
+  //// want 2 channels/stereo to allow for panning effects
+  //// write sound slightly ahead of play cursor
 
-  // hardware parameters
-  int frame_size = 1024;
-  int num_channels = 2;
-  int sample_rate = 48000; 
-  snd_pcm_hw_params hw_params = {};
-  for (int hw_param_mask_i = SNDRV_PCM_HW_PARAM_FIRST_MASK;
-       hw_param_mask_i <= SNDRV_PCM_HW_PARAM_LAST_MASK; 
-       ++hw_param_mask_i) 
-  {
-    snd_mask *mask = &hw_params.masks[hw_param_mask_i - SNDRV_PCM_HW_PARAM_FIRST_MASK];
-    memset(mask, 0xff, sizeof(*mask));
+  //// hardware parameters
+  //int frame_size = 1024;
+  //int num_channels = 2;
+  //int sample_rate = 48000; 
+  //snd_pcm_hw_params hw_params = {};
+  //for (int hw_param_mask_i = SNDRV_PCM_HW_PARAM_FIRST_MASK;
+  //     hw_param_mask_i <= SNDRV_PCM_HW_PARAM_LAST_MASK; 
+  //     ++hw_param_mask_i) 
+  //{
+  //  snd_mask *mask = &hw_params.masks[hw_param_mask_i - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+  //  memset(mask, 0xff, sizeof(*mask));
 
-    hw_params.cmask |= 1 << hw_param_mask_i;
-    hw_params.rmask |= 1 << hw_param_mask_i;
-  }
-  for (int hw_param_interval_i = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL;
-       hw_param_interval_i <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; 
-       hw_param_interval_i++)
-  {
-    snd_interval *interval = &hw_params.intervals[hw_param_interval_i - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
-    memset(interval, 0x00, sizeof(*interval));
-    // or UINT_MAX;
-    interval->max = -1;
+  //  hw_params.cmask |= 1 << hw_param_mask_i;
+  //  hw_params.rmask |= 1 << hw_param_mask_i;
+  //}
+  //for (int hw_param_interval_i = SNDRV_PCM_HW_PARAM_FIRST_INTERVAL;
+  //     hw_param_interval_i <= SNDRV_PCM_HW_PARAM_LAST_INTERVAL; 
+  //     hw_param_interval_i++)
+  //{
+  //  snd_interval *interval = &hw_params.intervals[hw_param_interval_i - SNDRV_PCM_HW_PARAM_FIRST_INTERVAL];
+  //  memset(interval, 0x00, sizeof(*interval));
+  //  // or UINT_MAX;
+  //  interval->max = -1;
 
-    hw_params.cmask |= 1 << hw_param_interval_i;
-    hw_params.rmask |= 1 << hw_param_interval_i;
-  }
-  hw_params.rmask = ~0U;
-  hw_params.cmask = 0;
-  hw_params.info = ~0U;
+  //  hw_params.cmask |= 1 << hw_param_interval_i;
+  //  hw_params.rmask |= 1 << hw_param_interval_i;
+  //}
+  //hw_params.rmask = ~0U;
+  //hw_params.cmask = 0;
+  //hw_params.info = ~0U;
 
-  if (ioctl(pcm_fd, SNDRV_PCM_IOCTL_HW_REFINE, &hw_params) == -1)
-  {
-    EBP();
-  }
+  //if (ioctl(pcm_fd, SNDRV_PCM_IOCTL_HW_REFINE, &hw_params) == -1)
+  //{
+  //  EBP();
+  //}
 
-  int access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
-  snd_mask *mask = &hw_params.masks[SNDRV_PCM_HW_PARAM_ACCESS - SNDRV_PCM_HW_PARAM_FIRST_MASK];
+  //int access = SNDRV_PCM_ACCESS_RW_INTERLEAVED;
+  //snd_mask *mask = &hw_params.masks[SNDRV_PCM_HW_PARAM_ACCESS - SNDRV_PCM_HW_PARAM_FIRST_MASK];
 
-  int mask_index = access / sizeof(hw_params.masks[0].bits[0]);
-  int mask_offset = access % sizeof(hw_params.masks[0].bits[0]);
-  int mask_num_bits = sizeof(mask->bits) / sizeof(mask->bits[0]);
-  for (int i = 0; i < mask_num_bits; ++i)
-  {
-    mask->bits[i] = 0x00;
-  }
-  mask->bits[mask_index] &= ~(1 << mask_offset);
-  mask->bits[mask_index] |= (1 << mask_offset);
-  hw_params.rmask |= (1 << SNDRV_PCM_HW_PARAM_ACCESS);
-  // call IOCTL_HW_REFINE again?
+  //int mask_index = access / sizeof(hw_params.masks[0].bits[0]);
+  //int mask_offset = access % sizeof(hw_params.masks[0].bits[0]);
+  //int mask_num_bits = sizeof(mask->bits) / sizeof(mask->bits[0]);
+  //for (int i = 0; i < mask_num_bits; ++i)
+  //{
+  //  mask->bits[i] = 0x00;
+  //}
+  //mask->bits[mask_index] &= ~(1 << mask_offset);
+  //mask->bits[mask_index] |= (1 << mask_offset);
+  //hw_params.rmask |= (1 << SNDRV_PCM_HW_PARAM_ACCESS);
+  //// call IOCTL_HW_REFINE again?
 
-  int format = SNDRV_PCM_FORMAT_S16_LE;
-  SNDDRV_PCM_HW_PARAM_FORMAT;
+  //int format = SNDRV_PCM_FORMAT_S16_LE;
+  //SNDDRV_PCM_HW_PARAM_FORMAT;
   //snd_pcm_hw_params_set_format(snd_fd, hwparams, SND_PCM_FORMAT_S16_LE);
 
   // 
@@ -564,8 +607,9 @@ main(int argc, char *argv[])
   int epoll_evdev_fd = epoll_create1(0);
   evdev_populate_devices(epoll_evdev_fd, evdev_devices);
 
+  // usermod -a $(whomai) -G input
   // NOTE(Ryan): Sound devices picked up with mixer events
-  alsa_init();
+  //alsa_init();
 
 
   bool want_to_run = true;
