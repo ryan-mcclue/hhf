@@ -395,44 +395,115 @@ evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[RLIMIT_NOFILE])
   }
 }
 
-INTERNAL void
-alsa_init(void)
+INTERNAL bool
+alsa_pcm_device_has_playback_subdevice(int ctl_fd, int card_num, int pcm_device_i)
 {
-  int ctl_fd = 0;
+  bool has_playback_subdevice = false;
+
+  int pcm_subdevice_i = 0;
+  while (true)
+  {
+    struct snd_pcm_info pcm_info = {};
+    pcm_info.device = pcm_device_i;
+    pcm_info.subdevice = pcm_subdevice_i;
+    pcm_info.card = card_num;
+    pcm_info.stream = SNDRV_PCM_STREAM_PLAYBACK;
+
+    if (ioctl(ctl_fd, SNDRV_CTL_IOCTL_PCM_INFO, &pcm_info) == -1)
+    {
+      bool subdevice_is_not_pcm_playback = (errno == ENOENT);
+      if (subdevice_is_not_pcm_playback)
+      {
+        pcm_subdevice_i++;
+        if (pcm_subdevice_i >= (int)pcm_info.subdevices_count) break;
+      }
+      else EBP();
+    }
+    else
+    {
+      has_playback_subdevice = true;
+      break;
+    }
+  }
+
+  return has_playback_subdevice;
+}
+
+
+INTERNAL int
+alsa_ctl_find_pcm_playback_device(int ctl_fd)
+{
+  char pcmp_path[64] = {};
+  int pcmp_fd = -1;
+
+  snd_ctl_card_info card_info = {};
+  if (ioctl(ctl_fd, SNDRV_CTL_IOCTL_CARD_INFO, &card_info) == -1) EBP();
+
+  int card_num = card_info.card;
+  unsigned char *card_driver = card_info.driver;
+  unsigned char *card_codec = card_info.mixername;
+
+  int pcm_device_i = 0;
+  while (true)
+  {
+    if (ioctl(ctl_fd, SNDRV_CTL_IOCTL_PCM_NEXT_DEVICE, &pcm_device_i) == -1) EBP();
+
+    bool no_pcm_devices_left = (pcm_device_i < 0);
+    if (no_pcm_devices_left) break;
+
+    if (alsa_pcm_device_has_playback_subdevice(ctl_fd, card_num, pcm_device_i))
+    {
+      sprintf(pcmp_path, "/dev/snd/pcmC%dD%dp", card_num, pcm_device_i);
+      printf("using pcm device: %s\n", pcmp_path);
+      pcmp_fd = open(pcmp_path, O_RDWR);
+      if (pcmp_fd == -1) EBP();
+      else break;
+    }
+
+    pcm_device_i++;
+  }
+
+  return pcmp_fd;
+}
+
+INTERNAL void
+alsa_find_pcm_playback_devices(int *ctl_fd, int *pcmp_fd)
+{
   char ctl_path[64] = {};
+  int possible_ctl_fd = -1, possible_pcmp_fd = -1;
   for (int card_i = 0; card_i < 4; ++card_i)
   {
     sprintf(ctl_path, "/dev/snd/controlC%d", card_i);
     if (access(ctl_path, F_OK) == 0)
     {
-      ctl_fd = open(ctl_path, O_RDONLY); 
-      if (ctl_fd == -1)
-      {
-        EBP();
-      }
+      possible_ctl_fd = open(ctl_path, O_RDONLY);
+      if (possible_ctl_fd == -1) EBP();
 
-      snd_ctl_card_info card_info = {};
-      if (ioctl(ctl_fd, SNDRV_CTL_IOCTL_CARD_INFO, &card_info) == -1)
-      {
-        EBP();
-      }
-
-      // cards aren't added in a sequential fashion, e.g. /dev/snd/pcmC0D3p could be first
-      // so may have to enumerate
-      printf("card: %d\n", card_info.card);
-      printf("driver: %s\n", card_info.driver);
-      printf("mixername (codec): %s\n", card_info.mixername);
-
-      
+      possible_pcmp_fd = alsa_ctl_find_pcm_playback_device(possible_ctl_fd);
+      if (possible_pcmp_fd != -1) break;
+      else close(possible_ctl_fd);
     }
   }
+  
+  printf("using control: %s\n", ctl_path);
 
+  *pcmp_fd = possible_pcmp_fd;
+  *ctl_fd = possible_ctl_fd;
+}
+
+
+INTERNAL void
+alsa_init(void)
+{
+  // TODO(Ryan): Monitor for events
+  // int subscribe = 0;
+  // ioctl(ctl_fd, SNDRV_CTL_IOCTL_SUBSCRIBE_EVENTS, &subscribe, 0);
+  int ctl_fd = 0, pcmp_fd = 0;
+  alsa_find_pcm_playback_devices(&ctl_fd, &pcmp_fd);
+  if (pcmp_fd == -1 || ctl_fd == -1) BP();
 
 
   // alsa-kernel and alsa-lib
-
-  // /dev/snd/controlC0 can subscribe to events and can search for pcm devices
-
 
   // we are copying to kernel buffer which then gets copied to device
   // may get single-threaded overrun as copying to device will start immediately
@@ -607,9 +678,8 @@ main(int argc, char *argv[])
   int epoll_evdev_fd = epoll_create1(0);
   evdev_populate_devices(epoll_evdev_fd, evdev_devices);
 
-  // usermod -a $(whomai) -G input
   // NOTE(Ryan): Sound devices picked up with mixer events
-  //alsa_init();
+  alsa_init();
 
 
   bool want_to_run = true;
