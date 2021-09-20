@@ -40,6 +40,7 @@ enum EVDEV_DEVICE_TYPE
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
 #include <X11/extensions/Xrender.h>
+#include <X11/extensions/Xrandr.h>
 
 #include <cstdio>
 #include <cstring> 
@@ -53,6 +54,7 @@ typedef uint32_t u32;
 // NOTE(Ryan): This is to avoid compiler adjusting a value like 1234 to 1 which it
 //             would have to do if assigning to a bool.
 typedef u32 b32;
+typedef float r32;
 
 struct XlibBackBuffer
 {
@@ -143,7 +145,7 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
 }
 
 INTERNAL void
-xlib_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
+xrender_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
                          GC gc, XlibBackBuffer back_buffer, int window_width, int window_height)
 {
   XPutImage(display, back_buffer.pixmap, gc, back_buffer.image, 
@@ -189,6 +191,41 @@ render_weird_gradient(XlibBackBuffer *back_buffer, int x_offset, int y_offset)
       *pixel++ = red << 16 | green << 8 | blue;
     }
   }
+}
+
+INTERNAL int
+xrandr_get_active_refresh_rate(Display *display, Window root_window)
+{
+  XRRScreenResources *screen_resources = XRRGetScreenResources(display, root_window);
+  if (screen_resources == NULL) BP();
+
+  RRMode active_mode_id = 0;
+  for (int crtc_num = 0; crtc_num < screen_resources->ncrtc; ++crtc_num) 
+  {
+    XRRCrtcInfo *crtc_info = XRRGetCrtcInfo(display, screen_resources, 
+                                            screen_resources->crtcs[crtc_num]);
+    if (crtc_info == NULL) BP();
+
+    if (crtc_info->mode != None)
+    {
+      active_mode_id = crtc_info->mode;
+      break;
+    }
+  }
+
+  int refresh_rate = 0;
+  for (int mode_num = 0; mode_num < screen_resources->nmode; ++mode_num) 
+  {
+    XRRModeInfo mode_info = screen_resources->modes[mode_num];
+    if (mode_info.id == active_mode_id)
+    {
+      // TODO(Ryan): When to cast?
+      refresh_rate = (r32)mode_info.dotClock / 
+                     ((r32)mode_info.hTotal * (r32)mode_info.vTotal);
+    }
+  }
+
+  return refresh_rate;
 }
 
 /*
@@ -491,7 +528,6 @@ alsa_find_pcm_playback_devices(int *ctl_fd, int *pcmp_fd)
   *ctl_fd = possible_ctl_fd;
 }
 
-
 INTERNAL void
 alsa_init(void)
 {
@@ -502,26 +538,24 @@ alsa_init(void)
   alsa_find_pcm_playback_devices(&ctl_fd, &pcmp_fd);
   if (pcmp_fd == -1 || ctl_fd == -1) BP();
 
+  // write a frame's worth of samples. requires an enforced frame rate.
+  // int num_seconds_of_audio = 1;
+  // alsa_get_pcm_playback_ring_buffer(pcmp_fd, num_seconds_of_audio);
+  // int16 *samples =;
+  // *samples++ = LEFT; *samples++ = RIGHT;
+  // alsa_write_pcm_playback_buffer(pcmp_fd, buffer);
 
   // alsa-kernel and alsa-lib
 
   // we are copying to kernel buffer which then gets copied to device
   // may get single-threaded overrun as copying to device will start immediately
   // getting errors using software parameters to fill this and manually start
-  //int pcm_fd = open("/dev/snd/pcmC0D0p", 0);
-  //if (pcm_fd == -1)
-  //{
-  //  EBP();
-  //}
 
   //// 48k samples per second
   //// want 2 channels/stereo to allow for panning effects
   //// write sound slightly ahead of play cursor
 
   //// hardware parameters
-  //int frame_size = 1024;
-  //int num_channels = 2;
-  //int sample_rate = 48000; 
   //snd_pcm_hw_params hw_params = {};
   //for (int hw_param_mask_i = SNDRV_PCM_HW_PARAM_FIRST_MASK;
   //     hw_param_mask_i <= SNDRV_PCM_HW_PARAM_LAST_MASK; 
@@ -674,6 +708,8 @@ main(int argc, char *argv[])
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
 
+  int refresh_rate = xrandr_get_active_refresh_rate(xlib_display, xlib_root_window);
+
   EVDEV_DEVICE_TYPE evdev_devices[RLIMIT_NOFILE] = {};
   int epoll_evdev_fd = epoll_create1(0);
   evdev_populate_devices(epoll_evdev_fd, evdev_devices);
@@ -806,7 +842,7 @@ main(int argc, char *argv[])
 
     render_weird_gradient(&xlib_back_buffer, x_offset, y_offset);
 
-    xlib_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
+    xrender_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
                              xlib_gc, xlib_back_buffer, xlib_window_width, 
                              xlib_window_height);
   }
