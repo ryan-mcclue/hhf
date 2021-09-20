@@ -4,9 +4,13 @@
 #define GLOBAL static
 #define LOCAL_PERSIST static
 
+#define BILLION 1000000000L
+
+#include <sys/utsname.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <time.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <linux/netlink.h>
@@ -642,6 +646,12 @@ alsa_init(void)
 int
 main(int argc, char *argv[])
 {
+  struct utsname sys_info= {};
+  if (uname(&sys_info) == -1) EBP();
+  printf("Using kernel: %s\n", sys_info.release); 
+ 
+  if(setpriority(PRIO_PROCESS, our_pid, -20) == -1) EBP();
+
   Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL)
   {
@@ -708,15 +718,24 @@ main(int argc, char *argv[])
   XlibBackBuffer xlib_back_buffer = xlib_create_back_buffer(xlib_display, xlib_window,
                                                             xlib_visual_info, 1280, 720);
 
-  int refresh_rate = xrandr_get_active_refresh_rate(xlib_display, xlib_root_window);
-
   EVDEV_DEVICE_TYPE evdev_devices[RLIMIT_NOFILE] = {};
   int epoll_evdev_fd = epoll_create1(0);
   evdev_populate_devices(epoll_evdev_fd, evdev_devices);
 
   // NOTE(Ryan): Sound devices picked up with mixer events
+  // we are choosing 'always hit' frame rate for audio, i.e. no frame lag, guard thread etc.
   alsa_init();
 
+  // important to get this in at the start to ensure assumptions are correct
+  // 0th frame will be arbitrarily long, 
+  int refresh_rate = xrandr_get_active_refresh_rate(xlib_display, xlib_root_window);
+  long desired_ns_per_frame = BILLION / (r32)refresh_rate;
+
+  struct timespec prev_timespec = {};
+  // what is clock drift?
+  // set low nice value to decrease schedular quantum for us
+  if (clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec) == -1) EBP();
+  // this is wall time unaffected by NTP.  (__rtdsc() would be cpu time)
 
   bool want_to_run = true;
   int x_offset = 0, y_offset = 0;
@@ -845,6 +864,18 @@ main(int argc, char *argv[])
     xrender_display_back_buffer(xlib_display, xrender_pic_format, xlib_window,
                              xlib_gc, xlib_back_buffer, xlib_window_width, 
                              xlib_window_height);
+
+    struct timespec end_timespec = {};
+    if (clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec) == -1) EBP();
+    long ns_elapsed = (BILLION * (end_timespec.tv_sec - prev_timespec.tv_sec)) +
+                      (end_timespec.tv_nsec - prev_timespec.tv_nsec);
+    prev_timespec = end_timespec;
+
+    long ns_delta = desired_ns_per_frame - ns_elapsed;
+    if (ns_delta > 0) 
+    {
+      //nanosleep(ns_delta);
+    }
   }
 
   return 0;

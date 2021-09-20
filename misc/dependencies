@@ -2,8 +2,11 @@
 # SPDX-License-Identifier: zlib-acknowledgement 
 
 glibc_debugging="libc6-dbg glibc-source"
-
 device_debugging="evtest udevadm fftest"
+# NOTE(Ryan): Principally xrandr cmd-line tool
+x11_debugging="x11-xserver-utils"
+# NOTE(Ryan): Principally aplay cmd-line tool
+alsa_debugging="alsa-utils"
 
 essential="libx11-dev libxrender-dev libxrandr-dev"
 
