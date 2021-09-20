@@ -7,6 +7,7 @@
 #define BILLION 1000000000L
 
 #include <sys/utsname.h>
+#include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -650,7 +651,9 @@ main(int argc, char *argv[])
   if (uname(&sys_info) == -1) EBP();
   printf("Using kernel: %s\n", sys_info.release); 
  
-  if(setpriority(PRIO_PROCESS, our_pid, -20) == -1) EBP();
+  int our_pid = getpid();
+  int min_niceness = -20;
+  if(setpriority(PRIO_PROCESS, our_pid, min_niceness) == -1) EBP();
 
   Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL)
@@ -874,7 +877,15 @@ main(int argc, char *argv[])
     long ns_delta = desired_ns_per_frame - ns_elapsed;
     if (ns_delta > 0) 
     {
-      //nanosleep(ns_delta);
+      struct timespec sleep_timespec = {}, elapsed_sleep_timespec = {};
+      elapsed_sleep_timespec.tv_sec = (r32)ns_delta / BILLION;
+      elapsed_sleep_timespec.tv_nsec = ns_delta % BILLION;
+      int sleep_status = -1;
+      do
+      {
+        sleep_timespec = elapsed_sleep_timespec;
+        sleep_status = nanosleep(&sleep_timespec, &elapsed_sleep_timespec);
+      } while (sleep_status == -1 && errno == EINTR);
     }
   }
 
