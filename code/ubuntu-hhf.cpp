@@ -7,6 +7,7 @@
 #define BILLION 1000000000L
 
 #include <sys/utsname.h>
+#include <sched.h>
 #include <sys/resource.h>
 #include <sys/mman.h>
 #include <sys/epoll.h>
@@ -647,20 +648,36 @@ alsa_init(void)
 int
 main(int argc, char *argv[])
 {
-  struct utsname sys_info= {};
+  // default scheduling policy is SCHED_OTHER round robin, no priority
+  // SCHED_FIFO, SCHED_RR are real time scheduling policies with priority 0 - 99
+  struct utsname sys_info = {};
   if (uname(&sys_info) == -1) EBP();
-  printf("Using kernel: %s\n", sys_info.release); 
+  printf("using kernel: %s\n", sys_info.release); 
  
   int our_pid = getpid();
   int min_niceness = -20;
-  if(setpriority(PRIO_PROCESS, our_pid, min_niceness) == -1) EBP();
+  if (setpriority(PRIO_PROCESS, our_pid, min_niceness) == -1) EBP();
+
+  int schedular_policy = sched_getscheduler(our_pid);
+  switch (schedular_policy)
+  {
+    case SCHED_OTHER: puts("scheduler other"); break;
+    case SCHED_FIFO: puts("scheduler fifo"); break;
+    case SCHED_RR: puts("scheduler rrr"); break;
+    default: puts("schedular unknown"); break;
+  }
+
+  // don't use realtime scheduling which allows setting static priority as
+  // they will restrict time access to other processes (FIFO first in first out,
+  // RR maximum quantum)
+  struct sched_param param = {};
+  if (sched_getparam(our_pid, &param) == -1) EBP();
+  printf("current schedular priority: %d\n", param.sched_priority);
+  printf("max schedular priority: %d\n", sched_get_priority_max(schedular_policy));
+  printf("min schedular priority: %d\n", sched_get_priority_min(schedular_policy));
 
   Display *xlib_display = XOpenDisplay(NULL);
-  if (xlib_display == NULL)
-  {
-    // TODO(Ryan): Error logging
-    BP();
-  }
+  if (xlib_display == NULL) BP();
 
   XSetErrorHandler(xlib_error_handler);
   XSetIOErrorHandler(xlib_io_error_handler);
@@ -671,11 +688,7 @@ main(int argc, char *argv[])
   Status xlib_visual_info_status = XMatchVisualInfo(xlib_display, xlib_screen, 
                                                     xlib_desired_screen_depth, TrueColor,
                                                     &xlib_visual_info);
-  if (xlib_visual_info_status == False)
-  {
-    // TODO(Ryan): Error logging
-    BP();
-  }
+  if (xlib_visual_info_status == False) BP();
 
   XSetWindowAttributes xlib_window_attr = {};
   int red = 0xee;
@@ -702,16 +715,8 @@ main(int argc, char *argv[])
   GC xlib_gc = XDefaultGC(xlib_display, xlib_screen);
 
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
-  if (xlib_wm_delete_atom == None) 
-  {
-    // TODO(Ryan): Error logging
-    BP();
-  }
-  if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False)
-  {
-    // TODO(Ryan): Error logging
-    BP();
-  }
+  if (xlib_wm_delete_atom == None) BP();
+  if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False) BP();
 
   XRenderPictFormat *xrender_pic_format = XRenderFindVisualFormat(xlib_display, 
                                                                xlib_visual_info.visual);
@@ -731,6 +736,8 @@ main(int argc, char *argv[])
 
   // important to get this in at the start to ensure assumptions are correct
   // 0th frame will be arbitrarily long, 
+  // IMPORTANT(Ryan): We are not locking the frame rate, rather fixing it from refresh rate.
+  // We could change it to something low if users computer is slow (however if 15fps, basically unplayable and better to get new computer)
   int refresh_rate = xrandr_get_active_refresh_rate(xlib_display, xlib_root_window);
   long desired_ns_per_frame = BILLION / (r32)refresh_rate;
 
