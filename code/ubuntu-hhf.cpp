@@ -47,6 +47,7 @@ enum EVDEV_DEVICE_TYPE
 #include <X11/Xatom.h>
 #include <X11/extensions/Xrender.h>
 #include <X11/extensions/Xrandr.h>
+#include <X11/extensions/Xpresent.h>
 
 #include <cstdio>
 #include <cstring> 
@@ -62,10 +63,21 @@ typedef uint32_t u32;
 typedef u32 b32;
 typedef float r32;
 
+struct XlibPresentPixmap
+{
+  Pixmap pixmap;
+  int width, height;
+  u32 serial;
+};
+
 struct XlibBackBuffer
 {
   XImage *image;
   Pixmap pixmap;
+  XlibPresentPixmap present_pixmap;
+  XserverRegion region;
+  RRCrtc crtc;
+  XRenderPictFormat *format;
   // NOTE(Ryan): Memory order: XX RR GG BB
   u8 *memory;
   int width;
@@ -81,6 +93,13 @@ INTERNAL void __ebp(void) { __attribute__((unused)) char *err = strerror(errno);
 #define BP()
 #define EBP()
 #endif
+
+INTERNAL long
+timespec_diff(struct timespec *start, struct timespec *end)
+{
+  return (BILLION * (end->tv_sec - start->tv_sec)) +
+         (end->tv_nsec - start->tv_nsec);
+}
 
 INTERNAL int
 xlib_error_handler(Display *display, XErrorEvent *err)
@@ -151,17 +170,24 @@ xlib_create_back_buffer(Display *display, Window window, XVisualInfo visual_info
 }
 
 INTERNAL void
-xrender_display_back_buffer(Display *display, XRenderPictFormat *format, Window window,
+xrender_xpresent_back_buffer(Display *display, XRenderPictFormat *format, Window window,
                          GC gc, XlibBackBuffer back_buffer, int window_width, int window_height)
 {
   XPutImage(display, back_buffer.pixmap, gc, back_buffer.image, 
           0, 0, 0, 0, back_buffer.width, back_buffer.height);
-  
+
+  if (back_buffer->present_pixmap->width != window_width ||
+      back_buffer->present_pixmap->height != window_height)
+  {
+    back_buffer->present_pixmap->pixmap = XCreatePixmap(display, window, window_width,
+                                                        window_height, visual_info.depth);
+  }
+
   XRenderPictureAttributes pict_attributes = {};
   Picture src_pict = XRenderCreatePicture(display, back_buffer.pixmap, 
                                           format, 0, 
                                           &pict_attributes);
-  Picture dst_pict = XRenderCreatePicture(display, window, 
+  Picture dst_pict = XRenderCreatePicture(display, present_pixmap, 
                                           format, 0, &pict_attributes);
   
   // TODO(Ryan): Restrict to particular resolutions that align with our art
@@ -177,6 +203,10 @@ xrender_display_back_buffer(Display *display, XRenderPictFormat *format, Window 
   XRenderComposite(display, PictOpSrc, src_pict, 0, dst_pict, 
                   0, 0, 0, 0, 0, 0,
                   window_width, window_height);
+
+  XPresentPixmap(xlib_display, xlib_window, present_pixmap, serial++, 
+      present_region, present_region, 0, 0, None, None, None, PresentOptionNone,
+      0, 0, 0, NULL, 0);
 }
 
 INTERNAL void
@@ -225,9 +255,10 @@ xrandr_get_active_refresh_rate(Display *display, Window root_window)
     XRRModeInfo mode_info = screen_resources->modes[mode_num];
     if (mode_info.id == active_mode_id)
     {
-      // TODO(Ryan): When to cast?
+      // NOTE(Ryan): Only need to cast once due to implicit type promotion with
+      // operands of less precision
       refresh_rate = (r32)mode_info.dotClock / 
-                     ((r32)mode_info.hTotal * (r32)mode_info.vTotal);
+                     (mode_info.hTotal * mode_info.vTotal);
     }
   }
 
@@ -496,6 +527,7 @@ alsa_ctl_find_pcm_playback_device(int ctl_fd)
 
     if (alsa_pcm_device_has_playback_subdevice(ctl_fd, card_num, pcm_device_i))
     {
+      // TODO(Ryan): Remove vararg with safer custom version
       sprintf(pcmp_path, "/dev/snd/pcmC%dD%dp", card_num, pcm_device_i);
       printf("using pcm device: %s\n", pcmp_path);
       pcmp_fd = open(pcmp_path, O_RDWR);
@@ -655,8 +687,8 @@ main(int argc, char *argv[])
   printf("using kernel: %s\n", sys_info.release); 
  
   int our_pid = getpid();
-  int min_niceness = -20;
-  if (setpriority(PRIO_PROCESS, our_pid, min_niceness) == -1) EBP();
+  //int min_niceness = -20;
+  //if (setpriority(PRIO_PROCESS, our_pid, min_niceness) == -1) EBP();
 
   int schedular_policy = sched_getscheduler(our_pid);
   switch (schedular_policy)
@@ -709,6 +741,17 @@ main(int argc, char *argv[])
       xlib_visual_info.visual, attribute_mask, &xlib_window_attr);
 
   XStoreName(xlib_display, xlib_window, "HHF");
+
+  XSizeHints *xlib_size_hints = XAllocSizeHints();
+  xlib_size_hints->flags |= PWinGravity;
+  xlib_size_hints->win_gravity = 5; // center
+  XSetWMNormalHints(xlib_display, xlib_window, xlib_size_hints);
+  XFree(xlib_size_hints);
+
+  int present_op = 0, event = 0, error = 0;
+  XPresentQueryExtension(xlib_display, &present_op, &event, &error);
+  XPresentSelectInput(xlib_display, xlib_window, PresentCompleteNotifyMask);
+
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
@@ -717,6 +760,7 @@ main(int argc, char *argv[])
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
   if (xlib_wm_delete_atom == None) BP();
   if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False) BP();
+
 
   XRenderPictFormat *xrender_pic_format = XRenderFindVisualFormat(xlib_display, 
                                                                xlib_visual_info.visual);
@@ -741,6 +785,7 @@ main(int argc, char *argv[])
   int refresh_rate = xrandr_get_active_refresh_rate(xlib_display, xlib_root_window);
   long desired_ns_per_frame = BILLION / (r32)refresh_rate;
 
+
   struct timespec prev_timespec = {};
   // what is clock drift?
   // set low nice value to decrease schedular quantum for us
@@ -752,8 +797,9 @@ main(int argc, char *argv[])
   while (want_to_run)
   {
     XEvent xlib_event = {};
-    while (XCheckWindowEvent(xlib_display, xlib_window, StructureNotifyMask, &xlib_event))
+    while (XPending(xlib_display) > 0)
     {
+      XNextEvent(xlib_display, &xlib_event);
       switch (xlib_event.type)
       {
         case ConfigureNotify:
@@ -761,18 +807,44 @@ main(int argc, char *argv[])
           xlib_window_width = xlib_event.xconfigure.width;
           xlib_window_height = xlib_event.xconfigure.height;
         } break;
+        case GenericEvent:
+        {
+          puts("hi");
+        } break;
+        case ClientMessage:
+        {
+          if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
+          {
+            XDestroyWindow(xlib_display, xlib_window);
+            want_to_run = false;
+          }
+        } break;
       }
     }
-    
-    while (XCheckTypedWindowEvent(xlib_display, xlib_window, ClientMessage, &xlib_event))
-    {
-      if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
+
+    /*
+      if (have_not_updated_this_frame)
       {
-        XDestroyWindow(xlib_display, xlib_window);
-        want_to_run = false;
-        break;
+        update()
+        have_not_updated_this_frame = false;
       }
-    }
+    */
+    
+    //while (XCheckTypedWindowEvent(xlib_display, xlib_window, GenericEvent, &xlib_event))
+    //{
+    //  puts("generic");
+    //XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
+    //if (cookie->extension == present_op)
+    //{
+    //  XGetEventData(xlib_display, cookie);
+    //  if (cookie->evtype == PresentCompleteNotify)
+    //  {
+    //    puts("present");
+    //    // display();
+    //  }
+    //  XFreeEventData(xlib_display, cookie);
+    //   }
+    //}
 
     // TODO(Ryan): Investigate using _NET_ACTIVE_WINDOW atom
     Window xlib_focused_window = 0;
@@ -876,24 +948,20 @@ main(int argc, char *argv[])
                              xlib_window_height);
 
     struct timespec end_timespec = {};
-    if (clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec) == -1) EBP();
-    long ns_elapsed = (BILLION * (end_timespec.tv_sec - prev_timespec.tv_sec)) +
-                      (end_timespec.tv_nsec - prev_timespec.tv_nsec);
-    prev_timespec = end_timespec;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
+    long ns_elapsed = timespec_diff(&prev_timespec, &end_timespec);
 
     long ns_delta = desired_ns_per_frame - ns_elapsed;
-    if (ns_delta > 0) 
+    while (timespec_diff(&prev_timespec, &end_timespec) < ns_delta)
     {
-      struct timespec sleep_timespec = {}, elapsed_sleep_timespec = {};
-      elapsed_sleep_timespec.tv_sec = (r32)ns_delta / BILLION;
-      elapsed_sleep_timespec.tv_nsec = ns_delta % BILLION;
-      int sleep_status = -1;
-      do
-      {
-        sleep_timespec = elapsed_sleep_timespec;
-        sleep_status = nanosleep(&sleep_timespec, &elapsed_sleep_timespec);
-      } while (sleep_status == -1 && errno == EINTR);
+      clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
     }
+
+    struct timespec final_timespec = {};
+    clock_gettime(CLOCK_MONOTONIC_RAW, &final_timespec);
+    printf("ms: %f\n", timespec_diff(&prev_timespec, &final_timespec) / 1000000.0f); 
+
+    prev_timespec = final_timespec;
   }
 
   return 0;

@@ -3,12 +3,12 @@
 
 glibc_debugging="libc6-dbg glibc-source"
 device_debugging="evtest udevadm fftest"
-# NOTE(Ryan): Principally xrandr cmd-line tool
+# NOTE(Ryan): Principally xrandr cmd-line tool, xdpyinfo
 x11_debugging="x11-xserver-utils"
 # NOTE(Ryan): Principally aplay cmd-line tool
 alsa_debugging="alsa-utils"
 
-essential="libx11-dev libxrender-dev libxrandr-dev"
+essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev"
 
 sudo apt install $essential
 
