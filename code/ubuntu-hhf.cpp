@@ -1,25 +1,5 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 
-#include <x86intrin.h>
-
-#include <sys/mman.h>
-#include <sys/ioctl.h>
-#include <sys/resource.h>
-#include <sys/epoll.h>
-#include <sys/types.h>
-#include <fcntl.h>
-#include <time.h>
-#include <unistd.h>
-#include <linux/input.h>
-
-#include <X11/Xlib.h>
-#include <X11/Xutil.h>
-#include <X11/Xatom.h>
-#include <X11/extensions/Xrender.h>
-#include <X11/extensions/Xrandr.h>
-#include <X11/extensions/Xpresent.h>
-#include <X11/extensions/Xfixes.h>
-
 #include <cmath>
 #include <cstdio>
 #include <cstring> 
@@ -28,7 +8,6 @@
 #include <cstdint>
 #include <cctype>
 #include <climits>
-
 
 #define INTERNAL static
 #define GLOBAL static
@@ -69,6 +48,32 @@ INTERNAL void __ebp(char *msg)
 
 #define ARRAY_LEN(arr) \
   (sizeof(arr)/sizeof(arr[0]))
+
+#include "hhf.h"
+#include "hhf.cpp"
+
+// platform specific last as OS may #define crazy things that override us
+
+#include <x86intrin.h>
+
+#include <sys/mman.h>
+#include <sys/ioctl.h>
+#include <sys/resource.h>
+#include <sys/epoll.h>
+#include <sys/types.h>
+#include <fcntl.h>
+#include <time.h>
+#include <unistd.h>
+#include <linux/input.h>
+
+#include <X11/Xlib.h>
+#include <X11/Xutil.h>
+#include <X11/Xatom.h>
+#include <X11/extensions/Xrender.h>
+#include <X11/extensions/Xrandr.h>
+#include <X11/extensions/Xpresent.h>
+#include <X11/extensions/Xfixes.h>
+
 
 #define EVDEV_BITFIELD_QUANTA \
   (sizeof(unsigned long) * 8)
@@ -206,7 +211,6 @@ struct XlibBackBuffer
   int width;
   int height;
 };
-
 
 INTERNAL int
 xlib_error_handler(Display *display, XErrorEvent *err)
@@ -401,25 +405,6 @@ xrandr_get_active_crtc(Display *display, Window root_window)
   return active_crtc;
 }
 
-INTERNAL void
-render_weird_gradient(XlibBackBuffer *back_buffer, int x_offset, int y_offset)
-{
-  u32 *pixel = (u32 *)back_buffer->memory;
-  for (int back_buffer_y = 0; 
-        back_buffer_y < back_buffer->height;
-        ++back_buffer_y)
-  {
-    for (int back_buffer_x = 0; 
-        back_buffer_x < back_buffer->width;
-        ++back_buffer_x)
-    {
-      u8 red = back_buffer_x + x_offset;
-      u8 green = back_buffer_y + y_offset;
-      u8 blue = 0x33;
-      *pixel++ = red << 16 | green << 8 | blue;
-    }
-  }
-}
 
 int
 main(int argc, char *argv[])
@@ -480,6 +465,10 @@ main(int argc, char *argv[])
     xlib_create_back_buffer(xlib_display, xlib_visual_info, xlib_window,
                             xlib_window_width, xlib_window_height,
                             xlib_back_buffer_width, xlib_back_buffer_height);
+  HHFBackBuffer hhf_back_buffer = {};
+  hhf_back_buffer.width = xlib_back_buffer.width;
+  hhf_back_buffer.height = xlib_back_buffer.height;
+  hhf_back_buffer.memory = xlib_back_buffer.memory;
 
   EVDEV_DEVICE_TYPE evdev_devices[MAX_PROCESS_FDS] = {};
   int epoll_evdev_fd = epoll_create1(0);
@@ -618,9 +607,7 @@ main(int argc, char *argv[])
               }
             }
             
-            // game update
-            render_weird_gradient(&xlib_back_buffer, x_offset, y_offset);
-            x_offset += 2;
+            hhf_update_and_render(&hhf_back_buffer);
 
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
