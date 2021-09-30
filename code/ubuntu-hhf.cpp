@@ -77,8 +77,6 @@ INTERNAL void __ebp(char const *msg)
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
-
-
 #define EVDEV_BITFIELD_QUANTA \
   (sizeof(unsigned long) * 8)
 #define EVDEV_BITFIELD_LEN(bit_count) \
