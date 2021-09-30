@@ -29,12 +29,12 @@ typedef float r32;
 typedef double r64;
 
 #if defined(HHF_DEV)
-INTERNAL void __bp(char *msg)
+INTERNAL void __bp(char const *msg)
 { 
   if (msg != NULL) printf("BP: %s\n", msg);
   return; 
 }
-INTERNAL void __ebp(char *msg)
+INTERNAL void __ebp(char const *msg)
 { 
   if (msg != NULL) printf("EBP: %s (%s)\n", msg, strerror(errno)); 
   return;
@@ -73,6 +73,10 @@ INTERNAL void __ebp(char *msg)
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
+
+#include <pulse/simple.h>
+#include <pulse/error.h>
+
 
 
 #define EVDEV_BITFIELD_QUANTA \
@@ -478,6 +482,24 @@ main(int argc, char *argv[])
                                                                xlib_root_window);
   r32 frame_dt = 1.0f / xrandr_active_crtc.refresh_rate;
 
+  int pulse_samples_per_second = 44100;
+  int pulse_num_channels = 2;
+  int pulse_error_code = 0;
+  pa_sample_spec pulse_spec = {};
+  pulse_spec.format = PA_SAMPLE_S16LE;
+  pulse_spec.rate = pulse_samples_per_second;
+  pulse_spec.channels = pulse_num_channels;
+
+  pa_simple *pulse_player = pa_simple_new(NULL, "HHF", PA_STREAM_PLAYBACK, NULL, 
+                                          "HHF Sound", &pulse_spec, NULL, NULL,
+                                          &pulse_error_code);
+  if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
+
+  int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
+  int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
+  s16 pulse_buffer[pulse_buffer_num_samples] = {};
+
+
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, xlib_window_width, 
                                xlib_window_height);
@@ -606,6 +628,23 @@ main(int argc, char *argv[])
                 }
               }
             }
+
+            double rad = 0.0;
+            s16 *pulse_samples = pulse_buffer;
+            for (int pulse_buffer_sample_i = 0; 
+                 pulse_buffer_sample_i < pulse_buffer_num_base_samples;
+                 pulse_buffer_sample_i++)
+            {
+              double val = sin(rad) * 32767;
+              *pulse_samples++ = val;
+              *pulse_samples++ = val;
+
+              rad += 0.1;
+              rad = fmod(rad, 2.0 * M_PI);
+            }
+            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
+                                &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
+            // should call pa_simple_drain(pulse_player, &pulse_error_code)?
             
             hhf_update_and_render(&hhf_back_buffer);
 
