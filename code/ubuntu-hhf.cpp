@@ -643,8 +643,11 @@ main(int argc, char *argv[])
                  pulse_buffer_sample_i < pulse_buffer_num_base_samples;
                  pulse_buffer_sample_i++)
             {
-              s16 val = ((running_sample_index / half_tone_period) % 2) ? 
-                          tone_volume : -tone_volume;
+              r32 t = (r32)running_sample_index / tone_period; 
+              r32 val = sin(2.0f * M_PI * t) * tone_volume;
+              // square wave too harsh to identify sound bugs
+              // s16 val = ((running_sample_index / half_tone_period) % 2) ? 
+              //            tone_volume : -tone_volume;
               *pulse_samples++ = val;
               *pulse_samples++ = val;
 
@@ -652,7 +655,6 @@ main(int argc, char *argv[])
             }
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
-
             
             hhf_update_and_render(&hhf_back_buffer);
 
@@ -664,7 +666,7 @@ main(int argc, char *argv[])
 
             prev_timespec = end_timespec;
             prev_cycle_count = end_cycle_count;
-            
+
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
