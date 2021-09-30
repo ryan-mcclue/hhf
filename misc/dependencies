@@ -2,9 +2,18 @@
 # SPDX-License-Identifier: zlib-acknowledgement 
 
 glibc_debugging="libc6-dbg glibc-source"
+device_debugging="evtest udevadm fftest"
+# NOTE(Ryan): Principally xrandr cmd-line tool, xdpyinfo
+x11_debugging="x11-xserver-utils"
+# NOTE(Ryan): Principally aplay cmd-line tool
+alsa_debugging="alsa-utils"
 
-device_debugging="evtest udevadm"
-
-essential="libx11-dev libxrender-dev"
+essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev libpulse-dev"
 
 sudo apt install $essential
+
+member_of_input="$(id -nG "$USER" | grep "input")"
+if test ! "$member_of_input"; then
+  usermod -a "$USER" -G input
+  printf "\n\nMust log out and log back in for user to access evdev\n"
+fi
