@@ -14,6 +14,8 @@
 #define LOCAL_PERSIST static
 #define BILLION 1000000000L
 
+typedef unsigned int uint;
+
 typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
@@ -497,6 +499,15 @@ main(int argc, char *argv[])
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 pulse_buffer[pulse_buffer_num_samples] = {};
 
+  s16 tone_hz = 256; 
+  s16 tone_volume = 3000;
+  int tone_period = pulse_samples_per_second / tone_hz; 
+  int half_tone_period = tone_period / 2;
+  uint running_sample_index = 0;
+
+  //pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code); 
+  //if (latency == -1) BP(pa_strerror(pulse_error_code));
+  //printf("%d usec\n", latency);
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, xlib_window_width, 
@@ -627,22 +638,21 @@ main(int argc, char *argv[])
               }
             }
 
-            double rad = 0.0;
             s16 *pulse_samples = pulse_buffer;
             for (int pulse_buffer_sample_i = 0; 
                  pulse_buffer_sample_i < pulse_buffer_num_base_samples;
                  pulse_buffer_sample_i++)
             {
-              double val = sin(rad) * 32767;
+              s16 val = ((running_sample_index / half_tone_period) % 2) ? 
+                          tone_volume : -tone_volume;
               *pulse_samples++ = val;
               *pulse_samples++ = val;
 
-              rad += 0.1;
-              rad = fmod(rad, 2.0 * M_PI);
+              running_sample_index++;
             }
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
-            // should call pa_simple_drain(pulse_player, &pulse_error_code)?
+
             
             hhf_update_and_render(&hhf_back_buffer);
 
