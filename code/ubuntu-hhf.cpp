@@ -38,7 +38,8 @@ INTERNAL void __bp(char const *msg)
 }
 INTERNAL void __ebp(char const *msg)
 { 
-  if (msg != NULL) printf("EBP: %s (%s)\n", msg, strerror(errno)); 
+  char *errno_msg = strerror(errno);
+  if (msg != NULL) printf("EBP: %s (%s)\n", msg, errno_msg); 
   return;
 }
 #define BP(msg) __bp(msg)
@@ -62,6 +63,7 @@ INTERNAL void __ebp(char const *msg)
 #include <sys/ioctl.h>
 #include <sys/resource.h>
 #include <sys/epoll.h>
+#include <sys/poll.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <time.h>
@@ -76,107 +78,95 @@ INTERNAL void __ebp(char const *msg)
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
 
+#include <libudev.h>
+enum UDEV_DEVICE_TYPE
+{
+  UDEV_DEVICE_TYPE_IGNORE = 0,
+  UDEV_DEVICE_TYPE_KEYBOARD,
+  UDEV_DEVICE_TYPE_GAMEPAD,
+  UDEV_DEVICE_TYPE_MOUSE,
+};
+struct UdevHotplugDevice
+{
+  char dev_path[64];
+  int fd;
+};
+#define MAX_PROCESS_FDS RLIMIT_NOFILE
+#define EPOLL_UDEV_MAX_EVENTS 5
+#define MAX_UDEV_DEVICES 32
+
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
-#define EVDEV_BITFIELD_QUANTA \
-  (sizeof(unsigned long) * 8)
-#define EVDEV_BITFIELD_LEN(bit_count) \
-  ((bit_count) / EVDEV_BITFIELD_QUANTA + 1)
-#define EVDEV_BITFIELD_TEST(bitfield, bit) \
-  (((bitfield)[(bit) / EVDEV_BITFIELD_QUANTA] >> \
-     ((bit) % EVDEV_BITFIELD_QUANTA)) & 0x1)
-enum EVDEV_DEVICE_TYPE
+INTERNAL void
+udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
+                         UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS],
+                         UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
 {
-  EVDEV_DEVICE_TYPE_IGNORE = 1,
-  EVDEV_DEVICE_TYPE_KEYBOARD,
-  EVDEV_DEVICE_TYPE_GAMEPAD,
-  EVDEV_DEVICE_TYPE_MOUSE,
-};
-#define MAX_PROCESS_FDS RLIMIT_NOFILE
-#define EPOLL_EVDEV_MAX_EVENTS 5
+  LOCAL_PERSIST int hotplug_device_cursor = 0;
+  UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
-INTERNAL void 
-evdev_populate_devices(int epoll_fd, EVDEV_DEVICE_TYPE devices[MAX_PROCESS_FDS])
-{
-  char dev_path[64] = {};
-  for (int ev_id = 0; ev_id < 64; ++ev_id)
+  char const *dev_prop = \
+    udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
+  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
+
+  // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
+  dev_prop = udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
+
+  dev_prop = udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
+  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
+
+  if (dev_type != UDEV_DEVICE_TYPE_IGNORE)
   {
-    sprintf(dev_path, "/dev/input/event%d", ev_id);
-    if (access(dev_path, F_OK) == 0)
+    const char *dev_path = udev_device_get_devnode(device);
+    if (dev_path != NULL)
     {
-      int dev_fd = open(dev_path, O_RDWR);
+      int dev_fd = open(dev_path, O_RDWR | O_NONBLOCK);
       if (dev_fd == -1) EBP(NULL);
 
-      unsigned long dev_ev_capabilities[EVDEV_BITFIELD_LEN(EV_CNT)] = {};
-      unsigned long dev_key_capabilities[EVDEV_BITFIELD_LEN(KEY_CNT)] = {};
-      unsigned long dev_abs_capabilities[EVDEV_BITFIELD_LEN(ABS_CNT)] = {};
-      unsigned long dev_rel_capabilities[EVDEV_BITFIELD_LEN(REL_CNT)] = {};
-      unsigned long dev_ff_capabilities[EVDEV_BITFIELD_LEN(FF_CNT)] = {};
-      unsigned long dev_sw_capabilities[EVDEV_BITFIELD_LEN(SW_CNT)] = {};
-      if (ioctl(dev_fd, EVIOCGBIT(0, EV_CNT), dev_ev_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_KEY, KEY_CNT), dev_key_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_ABS, ABS_CNT), dev_abs_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_REL, REL_CNT), dev_rel_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_FF, FF_CNT), dev_ff_capabilities) == -1 ||
-          ioctl(dev_fd, EVIOCGBIT(EV_SW, SW_CNT), dev_sw_capabilities) == -1)
-      {
-        EBP(NULL);
-      }
+      struct epoll_event event = {};
+      event.events = EPOLLIN;
+      event.data.fd = dev_fd;
+      epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
 
-      char dev_name[256] = {};
-      if (ioctl(dev_fd, EVIOCGNAME(sizeof(dev_name)), dev_name) == -1) EBP(NULL);
-
-      EVDEV_DEVICE_TYPE dev_type = EVDEV_DEVICE_TYPE_IGNORE;
-
-      unsigned long esc_keys_letters_mask = 0xfffffffe;
-      if ((dev_key_capabilities[0] & esc_keys_letters_mask) != 0 &&
-           EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REP))
-      {
-        dev_type = EVDEV_DEVICE_TYPE_KEYBOARD;
-        printf("found keyboard: %s\n", dev_name);
-      }
-      if (EVDEV_BITFIELD_TEST(dev_sw_capabilities, SW_HEADPHONE_INSERT))
-      {
-        printf("found headphone: %s\n", dev_name);
-      }
-      if (EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_GAMEPAD))
-      {
-        dev_type = EVDEV_DEVICE_TYPE_GAMEPAD;
-        printf("found gamepad: %s\n", dev_name);
-      }
-      if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_REL) &&
-          EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_X) && 
-          EVDEV_BITFIELD_TEST(dev_rel_capabilities, REL_Y) &&
-          EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_MOUSE))
-      {
-        dev_type = EVDEV_DEVICE_TYPE_MOUSE;
-        printf("found mouse: %s\n", dev_name);
-      }
-
-      if (EVDEV_BITFIELD_TEST(dev_ev_capabilities, EV_ABS) &&
-          EVDEV_BITFIELD_TEST(dev_abs_capabilities, ABS_X) && 
-          EVDEV_BITFIELD_TEST(dev_abs_capabilities, ABS_Y) &&
-          EVDEV_BITFIELD_TEST(dev_key_capabilities, BTN_TOOL_FINGER))
-      {
-        dev_type = EVDEV_DEVICE_TYPE_MOUSE;
-        printf("found touchpad: %s\n", dev_name);
-      }
-
-      if (dev_type != EVDEV_DEVICE_TYPE_IGNORE)
-      {
-        struct epoll_event event = {};
-        event.events = EPOLLIN;
-        event.data.fd = dev_fd;
-        epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
-        devices[dev_fd] = dev_type;
-      }
-      else
-      {
-        close(dev_fd);
-      }
+      poll_devices[dev_fd] = dev_type;
+      strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
+      // TODO(Ryan): Removing a device won't reset this so continuosly adding and
+      // removing a device will cause this to segfault
+      hotplug_devices[hotplug_device_cursor++].fd = dev_fd;
     }
   }
+
+  udev_device_unref(device);
+}
+
+INTERNAL void
+udev_populate_devices(struct udev *udev_obj, int epoll_fd, 
+                      UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS],
+                      UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+{
+  struct udev_enumerate *udev_enum = udev_enumerate_new(udev_obj);
+  if (udev_enum == NULL) BP(NULL);
+
+  if (udev_enumerate_add_match_subsystem(udev_enum, "input") != 0) BP(NULL);
+
+  if (udev_enumerate_scan_devices(udev_enum) != 0) BP(NULL);
+
+  struct udev_list_entry *udev_entries = udev_enumerate_get_list_entry(udev_enum);
+  if (udev_entries == NULL) BP(NULL);
+
+  struct udev_list_entry *udev_entry = NULL;
+  udev_list_entry_foreach(udev_entry, udev_entries)
+  {
+    char const *udev_entry_syspath = udev_list_entry_get_name(udev_entry);
+    struct udev_device *device = udev_device_new_from_syspath(udev_obj, 
+                                                              udev_entry_syspath);
+
+    udev_possibly_add_device(epoll_fd, device, poll_devices, hotplug_devices);
+  }
+
+  udev_enumerate_unref(udev_enum);
 }
 
 INTERNAL long
@@ -409,7 +399,6 @@ xrandr_get_active_crtc(Display *display, Window root_window)
   return active_crtc;
 }
 
-
 int
 main(int argc, char *argv[])
 {
@@ -474,9 +463,17 @@ main(int argc, char *argv[])
   hhf_back_buffer.height = xlib_back_buffer.height;
   hhf_back_buffer.memory = xlib_back_buffer.memory;
 
-  EVDEV_DEVICE_TYPE evdev_devices[MAX_PROCESS_FDS] = {};
-  int epoll_evdev_fd = epoll_create1(0);
-  evdev_populate_devices(epoll_evdev_fd, evdev_devices);
+  struct udev *udev_obj = udev_new();
+  if (udev_obj == NULL) BP(NULL);
+
+  UDEV_DEVICE_TYPE udev_poll_devices[MAX_PROCESS_FDS] = {};
+  UdevHotplugDevice udev_hotplug_devices[MAX_UDEV_DEVICES] = {};
+  int epoll_udev_fd = epoll_create1(0);
+  udev_populate_devices(udev_obj, epoll_udev_fd, udev_poll_devices, udev_hotplug_devices);
+
+  struct udev_monitor *udev_mon = udev_monitor_new_from_netlink(udev_obj, "udev");
+  udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
+  udev_monitor_enable_receiving(udev_mon);
 
   XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
                                                                xlib_root_window);
@@ -499,15 +496,10 @@ main(int argc, char *argv[])
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 pulse_buffer[pulse_buffer_num_samples] = {};
 
-  s16 tone_hz = 256; 
-  s16 tone_volume = 3000;
-  int tone_period = pulse_samples_per_second / tone_hz; 
-  int half_tone_period = tone_period / 2;
-  uint running_sample_index = 0;
-
-  //pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code); 
-  //if (latency == -1) BP(pa_strerror(pulse_error_code));
-  //printf("%d usec\n", latency);
+  HHFSoundBuffer hhf_sound_buffer = {};
+  hhf_sound_buffer.samples_per_second = pulse_samples_per_second;
+  hhf_sound_buffer.samples = pulse_buffer;
+  hhf_sound_buffer.num_samples = pulse_buffer_num_base_samples; 
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, xlib_window_width, 
@@ -547,24 +539,68 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
+            bool checked_udev_hotplug = false;
+            while (!checked_udev_hotplug)
+            {
+              int hotplug_fd = udev_monitor_get_fd(udev_mon);
+              int hotplug_check = 0;
+              do
+              {
+                struct pollfd udev_poll = {};
+                udev_poll.fd = hotplug_fd;
+                udev_poll.events = POLLIN | POLLPRI;
+                hotplug_check = poll(&udev_poll, 1, 0);
+                if (hotplug_check) break;
+              } while (hotplug_check < 0 && errno == EINTR);
+              if (hotplug_check)
+              {
+                struct udev_device *dev = udev_monitor_receive_device(udev_mon);
+                const char *action = udev_device_get_action(dev);
+                if (strcmp(action, "add") == 0)
+                {
+                  udev_possibly_add_device(epoll_udev_fd, dev, udev_poll_devices, udev_hotplug_devices);  
+                }
+                if (strcmp(action, "remove") == 0)
+                {
+                  const char *dev_path = udev_device_get_devnode(dev);
+                  for (int hotplug_device_i = 0; 
+                       hotplug_device_i < MAX_UDEV_DEVICES;
+                       ++hotplug_device_i)
+                  {
+                    UdevHotplugDevice h_dev = udev_hotplug_devices[hotplug_device_i];
+                    if (strcmp(h_dev.dev_path, dev_path) == 0)
+                    {
+                      udev_hotplug_devices[hotplug_device_i] = {};
+                      close(h_dev.fd);
+                      udev_poll_devices[h_dev.fd] = UDEV_DEVICE_TYPE_IGNORE;
+                    }
+                  }
+                }
+                udev_device_unref(dev);
+              }
+              else
+              {
+                checked_udev_hotplug = true;
+              }
+            } 
+
             Window xlib_focused_window = 0;
             int xlib_focused_window_state = 0;
             XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
             if (xlib_focused_window == xlib_window)
             {
-              struct epoll_event epoll_evdev_events[EPOLL_EVDEV_MAX_EVENTS] = {0};
-              int timeout_ms = 1;
-              // TODO(Ryan): Should we poll this more frequently?
-              int num_epoll_evdev_events = epoll_wait(epoll_evdev_fd, epoll_evdev_events, 
-                                                      EPOLL_EVDEV_MAX_EVENTS, timeout_ms);
-              for (int epoll_evdev_event_i = 0;
-                  epoll_evdev_event_i < num_epoll_evdev_events; 
-                  ++epoll_evdev_event_i)
+              struct epoll_event epoll_udev_events[EPOLL_UDEV_MAX_EVENTS] = {0};
+              int timeout_ms = 0;
+              int num_epoll_udev_events = epoll_wait(epoll_udev_fd, epoll_udev_events, 
+                                                      EPOLL_UDEV_MAX_EVENTS, timeout_ms);
+              for (int epoll_udev_event_i = 0;
+                  epoll_udev_event_i < num_epoll_udev_events; 
+                  ++epoll_udev_event_i)
               {
-                int dev_fd = epoll_evdev_events[epoll_evdev_event_i].data.fd;
-                EVDEV_DEVICE_TYPE dev_type = evdev_devices[dev_fd];
+                int dev_fd = epoll_udev_events[epoll_udev_event_i].data.fd;
+                UDEV_DEVICE_TYPE dev_type = udev_poll_devices[dev_fd];
 
-                struct input_event dev_events[32] = {0};
+                struct input_event dev_events[4] = {0};
                 int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
                 if (dev_event_bytes_read == -1) EBP(NULL);
 
@@ -579,7 +615,7 @@ main(int argc, char *argv[])
                   bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
                   bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
-                  if (dev_type == EVDEV_DEVICE_TYPE_GAMEPAD)
+                  if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD)
                   {
                     bool up = (dev_event_code == BTN_DPAD_UP);
                     bool right = (dev_event_code == BTN_DPAD_RIGHT);
@@ -595,6 +631,21 @@ main(int argc, char *argv[])
                     bool south = (dev_event_code == BTN_SOUTH);
                     bool west = (dev_event_code == BTN_WEST);
 
+                    if (north && !was_down)
+                    {
+                      printf("north: ");
+                      if (is_released) 
+                      {
+                        printf("was_released");
+                      }
+                      else
+                      {
+                        printf("is_down");
+                      }
+                      printf("\n");
+                      fflush(stdout);
+                    }
+
                     int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
                     int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
 
@@ -602,7 +653,7 @@ main(int argc, char *argv[])
                     y_offset += stick_y >> 12;
                   }
 
-                  if (dev_type == EVDEV_DEVICE_TYPE_KEYBOARD)
+                  if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
                   {
                     bool w = (dev_event_code == KEY_W);
                     bool a = (dev_event_code == KEY_A);
@@ -638,31 +689,16 @@ main(int argc, char *argv[])
               }
             }
 
-            s16 *pulse_samples = pulse_buffer;
-            for (int pulse_buffer_sample_i = 0; 
-                 pulse_buffer_sample_i < pulse_buffer_num_base_samples;
-                 pulse_buffer_sample_i++)
-            {
-              r32 t = (r32)running_sample_index / tone_period; 
-              r32 val = sin(2.0f * M_PI * t) * tone_volume;
-              // square wave too harsh to identify sound bugs
-              // s16 val = ((running_sample_index / half_tone_period) % 2) ? 
-              //            tone_volume : -tone_volume;
-              *pulse_samples++ = val;
-              *pulse_samples++ = val;
+            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer);
 
-              running_sample_index++;
-            }
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
             
-            hhf_update_and_render(&hhf_back_buffer);
-
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
-            printf("ms per frame: %.02f\n", timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f); 
-            printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
+            //printf("ms per frame: %.02f\n", timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f); 
+            //printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
 
             prev_timespec = end_timespec;
             prev_cycle_count = end_cycle_count;
