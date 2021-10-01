@@ -502,7 +502,7 @@ main(int argc, char *argv[])
   s16 tone_hz = 256; 
   s16 tone_volume = 3000;
   int tone_period = pulse_samples_per_second / tone_hz; 
-  int half_tone_period = tone_period / 2;
+  r32 tone_t = 0.0f;
   uint running_sample_index = 0;
 
   //pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code); 
@@ -554,7 +554,7 @@ main(int argc, char *argv[])
             {
               struct epoll_event epoll_evdev_events[EPOLL_EVDEV_MAX_EVENTS] = {0};
               int timeout_ms = 1;
-              // TODO(Ryan): Should we poll this more frequently?
+              // TODO(Ryan): We are lagging here?
               int num_epoll_evdev_events = epoll_wait(epoll_evdev_fd, epoll_evdev_events, 
                                                       EPOLL_EVDEV_MAX_EVENTS, timeout_ms);
               for (int epoll_evdev_event_i = 0;
@@ -564,7 +564,7 @@ main(int argc, char *argv[])
                 int dev_fd = epoll_evdev_events[epoll_evdev_event_i].data.fd;
                 EVDEV_DEVICE_TYPE dev_type = evdev_devices[dev_fd];
 
-                struct input_event dev_events[32] = {0};
+                struct input_event dev_events[4] = {0};
                 int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
                 if (dev_event_bytes_read == -1) EBP(NULL);
 
@@ -629,6 +629,8 @@ main(int argc, char *argv[])
                       else
                       {
                         printf("is_down");
+                        tone_hz = 512;
+                        tone_period = pulse_samples_per_second / tone_hz;
                       }
                       printf("\n");
                       fflush(stdout);
@@ -643,13 +645,14 @@ main(int argc, char *argv[])
                  pulse_buffer_sample_i < pulse_buffer_num_base_samples;
                  pulse_buffer_sample_i++)
             {
-              r32 t = (r32)running_sample_index / tone_period; 
-              r32 val = sin(2.0f * M_PI * t) * tone_volume;
+              r32 val = sin(tone_t) * tone_volume;
               // square wave too harsh to identify sound bugs
               // s16 val = ((running_sample_index / half_tone_period) % 2) ? 
               //            tone_volume : -tone_volume;
               *pulse_samples++ = val;
               *pulse_samples++ = val;
+
+              tone_t += ((2.0f * M_PI) / (r32)tone_period);
 
               running_sample_index++;
             }
