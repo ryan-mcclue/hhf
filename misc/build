@@ -10,6 +10,8 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a'
 # IMPORTANT(Ryan): We disable preprocessor warnings to suppress RLIMIT_NOFILE redefinition
 # when including <sys/resource.h>
 dev_flags="-g -Wall -DHHF_DEV -Wno-unused-variable -Wp,-w"
+# IMPORTANT(Ryan): gcc extension to allow VLA.
+# Without, have to use alloca()
 
 libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse"
 
