@@ -11,7 +11,7 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a'
 # when including <sys/resource.h>
 dev_flags="-g -Wall -DHHF_DEV -Wno-unused-variable -Wp,-w"
 
-libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -lpulse-simple -lpulse"
+libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse"
 
 g++ $common_flags $dev_flags \
   code/ubuntu-hhf.cpp -o build/ubuntu-hhf \

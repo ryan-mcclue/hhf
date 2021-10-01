@@ -22,11 +22,33 @@ render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
   }
 }
 
+INTERNAL void
+output_sound(HHFSoundBuffer *sound_buffer)
+{
+  int tone_volume = 3000;
+  int tone_hz = 256;
+  int tone_period = sound_buffer->samples_per_second / tone_hz;
+  LOCAL_PERSIST r32 tone_t = 0.0f;
+
+  s16 *samples = sound_buffer->samples;
+  for (int sample_i = 0; 
+      sample_i < sound_buffer->num_samples;
+      sample_i++)
+  {
+    r32 val = sin(tone_t) * tone_volume;
+    *samples++ = val;
+    *samples++ = val;
+
+    tone_t += ((2.0f * M_PI) / (r32)tone_period);
+  }
+}
+
 void
-hhf_update_and_render(HHFBackBuffer *back_buffer)
+hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer)
 {
   LOCAL_PERSIST int x_offset = 0;
   LOCAL_PERSIST int y_offset = 0;
   render_weird_gradient(back_buffer, x_offset, y_offset);
+  output_sound(sound_buffer);
   x_offset += 2;
 }
