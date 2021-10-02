@@ -400,7 +400,7 @@ xrandr_get_active_crtc(Display *display, Window root_window)
 }
 
 INTERNAL void
-evdev_process_digital_button(HHFInputButtonState *prev_button_state,
+udev_process_digital_button(HHFInputButtonState *prev_button_state,
                              HHFInputButtonState *cur_button_state,
                              bool ended_down)
 {
@@ -408,6 +408,136 @@ evdev_process_digital_button(HHFInputButtonState *prev_button_state,
   if (cur_button_state->ended_down != prev_button_state->ended_down)
   {
     cur_button_state->half_transition_count++;
+  }
+}
+
+INTERVAL void
+udev_check_hotplug_devices(struct udev_monitor *monitor,
+                           UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS], 
+                           UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+{
+   int hotplug_fd = udev_monitor_get_fd(monitor);
+   int have_hotplug = 0;
+   do
+   {
+     struct pollfd udev_poll = {};
+     udev_poll.fd = hotplug_fd;
+     udev_poll.events = POLLIN | POLLPRI;
+     have_hotplug = poll(&udev_poll, 1, 0);
+   } while (have_hotplug < 0 && errno == EINTR);
+
+   if (have_hotplug)
+   {
+     struct udev_device *dev = udev_monitor_receive_device(monitor);
+     const char *action = udev_device_get_action(dev);
+     if (strcmp(action, "add") == 0)
+     {
+       udev_possibly_add_device(epoll_fd, dev, poll_devices, hotplug_devices);  
+     }
+     if (strcmp(action, "remove") == 0)
+     {
+       // TODO(Ryan): What to do when this is NULL? perhaps its sys first then dev?
+       const char *dev_path = udev_device_get_devnode(dev);
+       if (dev_path == NULL) BP(NULL); // call again?
+       for (int hotplug_device_i = 0; 
+            hotplug_device_i < MAX_UDEV_DEVICES;
+            ++hotplug_device_i)
+       {
+         UdevHotplugDevice h_dev = hotplug_devices[hotplug_device_i];
+         if (strcmp(h_dev.dev_path, dev_path) == 0)
+         {
+           udev_hotplug_devices[hotplug_device_i] = {};
+           close(h_dev.fd);
+           udev_poll_devices[h_dev.fd] = UDEV_DEVICE_TYPE_IGNORE;
+         }
+       }
+     }
+     udev_device_unref(dev);
+   }
+}
+
+INTERVAL void
+udev_check_poll_devices(int epoll_fd,
+                        UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS], 
+                        HHFInput *prev_input, HHFInput *cur_input)
+{
+  struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
+  int num_epoll_events = epoll_wait(epoll_fd, epoll_events, EPOLL_UDEV_MAX_EVENTS, 0);
+  for (int epoll_event_i = 0; epoll_event_i < num_epoll_events; ++epoll_event_i)
+  {
+    int dev_fd = epoll_events[epoll_event_i].data.fd;
+    UDEV_DEVICE_TYPE dev_type = poll_devices[dev_fd];
+
+    struct input_event dev_events[4] = {0};
+    int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
+    if (dev_event_bytes_read == -1) EBP(NULL);
+
+    int num_dev_events = dev_event_bytes_read / sizeof(dev_events[0]); 
+    for (int dev_event_i = 0; dev_event_i < num_dev_events; ++dev_event_i)
+    {
+      int dev_event_type = dev_events[dev_event_i].type;
+      int dev_event_code = dev_events[dev_event_i].code;
+      int dev_event_value = dev_events[dev_event_i].value;
+
+      bool is_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
+      bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
+      bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
+
+      // TODO(Ryan): Cannot vibrate
+      if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD)
+      {
+        bool up = (dev_event_code == BTN_DPAD_UP);
+        bool right = (dev_event_code == BTN_DPAD_RIGHT);
+        bool left = (dev_event_code == BTN_DPAD_LEFT);
+        bool down = (dev_event_code == BTN_DPAD_DOWN);
+        bool select = (dev_event_code == BTN_SELECT);
+        bool start = (dev_event_code == BTN_START);
+        bool home = (dev_event_code == BTN_MODE);
+        bool left_shoulder = (dev_event_code == BTN_TL);
+        bool right_shoulder = (dev_event_code == BTN_TR);
+        bool north = (dev_event_code == BTN_NORTH);
+        bool east = (dev_event_code == BTN_EAST);
+        bool south = (dev_event_code == BTN_SOUTH);
+        bool west = (dev_event_code == BTN_WEST);
+
+        int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
+        int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
+      }
+
+      // TODO(Ryan): hitting keys on different keyboards results in lag
+      if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
+      {
+        bool w = (dev_event_code == KEY_W);
+        bool a = (dev_event_code == KEY_A);
+        bool s = (dev_event_code == KEY_S);
+        bool d = (dev_event_code == KEY_D);
+        bool q = (dev_event_code == KEY_Q);
+        bool e = (dev_event_code == KEY_E);
+        bool up = (dev_event_code == KEY_UP);
+        bool down = (dev_event_code == KEY_DOWN);
+        bool left = (dev_event_code == KEY_LEFT);
+        bool right = (dev_event_code == KEY_RIGHT);
+        bool escape = (dev_event_code == KEY_ESC);
+        bool space = (dev_event_code == KEY_SPACE);
+        bool enter = (dev_event_code == KEY_ENTER);
+        bool ctrl = (dev_event_code == KEY_LEFTCTRL);
+
+        if (a && !was_down)
+        {
+          printf("a: ");
+          if (is_released) 
+          {
+            printf("was_released");
+          }
+          else
+          {
+            printf("is_down");
+          }
+          printf("\n");
+          fflush(stdout);
+        }
+      }
+    }
   }
 }
 
@@ -449,8 +579,8 @@ main(int argc, char *argv[])
 
   XStoreName(xlib_display, xlib_window, "HHF");
 
-  int present_op = 0, event = 0, error = 0;
-  XPresentQueryExtension(xlib_display, &present_op, &event, &error);
+  int xpresent_op = 0, event = 0, error = 0;
+  XPresentQueryExtension(xlib_display, &xpresent_op, &event, &error);
   XPresentSelectInput(xlib_display, xlib_window, PresentCompleteNotifyMask);
 
   XMapWindow(xlib_display, xlib_window); 
@@ -532,206 +662,50 @@ main(int argc, char *argv[])
   int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
-    /* XCheckTypedWindowEvent()
-     XCheckTypedEvent()
-
-      XEvent xlib_event = {};
-      while (XPending(xlib_display) > 0)
-      {
-        XNextEvent(xlib_display, &xlib_event);
-        if (xlib_event.type == GenericEvent)
-        XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
-        break;
-      } 
-
-      // update
-      // present
-    */
-    
     XEvent xlib_event = {};
     while (XPending(xlib_display) > 0)
     {
       XNextEvent(xlib_display, &xlib_event);
+
       if (xlib_event.type == ConfigureNotify)
       {
-        xlib_window_width = xlib_event.xconfigure.width;
-        xlib_window_height = xlib_event.xconfigure.height;
+          xlib_window_width = xlib_event.xconfigure.width;
+          xlib_window_height = xlib_event.xconfigure.height;
       }
-      if (xlib_event.type == ClientMessage)
+
+      if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
       {
-        if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
-        {
-          XDestroyWindow(xlib_display, xlib_window);
-          want_to_run = false;
-          break;
-        }
+        XDestroyWindow(xlib_display, xlib_window);
+        want_to_run = false;
+        break;
       }
+
+      udev_check_hotplug_devices();
+
+      Window xlib_focused_window = 0;
+      int xlib_focused_window_state = 0;
+      XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
+      if (xlib_focused_window == xlib_window)
+      {
+        udev_check_poll_devices();
+      }
+
       if (xlib_event.type == GenericEvent)
       {
         XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
-        if (cookie->extension == present_op)
+        if (cookie->extension == xpresent_op)
         {
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            bool checked_udev_hotplug = false;
-            while (!checked_udev_hotplug)
-            {
-              int hotplug_fd = udev_monitor_get_fd(udev_mon);
-              int hotplug_check = 0;
-              do
-              {
-                struct pollfd udev_poll = {};
-                udev_poll.fd = hotplug_fd;
-                udev_poll.events = POLLIN | POLLPRI;
-                hotplug_check = poll(&udev_poll, 1, 0);
-                if (hotplug_check) break;
-              } while (hotplug_check < 0 && errno == EINTR);
-              if (hotplug_check)
-              {
-                struct udev_device *dev = udev_monitor_receive_device(udev_mon);
-                const char *action = udev_device_get_action(dev);
-                if (strcmp(action, "add") == 0)
-                {
-                  udev_possibly_add_device(epoll_udev_fd, dev, udev_poll_devices, udev_hotplug_devices);  
-                }
-                if (strcmp(action, "remove") == 0)
-                {
-                  // TODO(Ryan): What to do when this is NULL?
-                  const char *dev_path = udev_device_get_devnode(dev);
-                  for (int hotplug_device_i = 0; 
-                       hotplug_device_i < MAX_UDEV_DEVICES;
-                       ++hotplug_device_i)
-                  {
-                    UdevHotplugDevice h_dev = udev_hotplug_devices[hotplug_device_i];
-                    if (strcmp(h_dev.dev_path, dev_path) == 0)
-                    {
-                      udev_hotplug_devices[hotplug_device_i] = {};
-                      close(h_dev.fd);
-                      udev_poll_devices[h_dev.fd] = UDEV_DEVICE_TYPE_IGNORE;
-                    }
-                  }
-                }
-                udev_device_unref(dev);
-              }
-              else
-              {
-                checked_udev_hotplug = true;
-              }
-            } 
-
-            Window xlib_focused_window = 0;
-            int xlib_focused_window_state = 0;
-            XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
-            if (xlib_focused_window == xlib_window)
-            {
-              struct epoll_event epoll_udev_events[EPOLL_UDEV_MAX_EVENTS] = {0};
-              int timeout_ms = 0;
-              int num_epoll_udev_events = epoll_wait(epoll_udev_fd, epoll_udev_events, 
-                                                      EPOLL_UDEV_MAX_EVENTS, timeout_ms);
-              for (int epoll_udev_event_i = 0;
-                  epoll_udev_event_i < num_epoll_udev_events; 
-                  ++epoll_udev_event_i)
-              {
-                int dev_fd = epoll_udev_events[epoll_udev_event_i].data.fd;
-                UDEV_DEVICE_TYPE dev_type = udev_poll_devices[dev_fd];
-
-                struct input_event dev_events[4] = {0};
-                int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
-                if (dev_event_bytes_read == -1) EBP(NULL);
-
-                int num_dev_events = dev_event_bytes_read / sizeof(dev_events[0]); 
-                for (int dev_event_i = 0; dev_event_i < num_dev_events; ++dev_event_i)
-                {
-                  int dev_event_type = dev_events[dev_event_i].type;
-                  int dev_event_code = dev_events[dev_event_i].code;
-                  int dev_event_value = dev_events[dev_event_i].value;
-
-                  bool is_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
-                  bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
-                  bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
-
-                  // TODO(Ryan): Cannot vibrate
-                  if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD)
-                  {
-                    bool up = (dev_event_code == BTN_DPAD_UP);
-                    bool right = (dev_event_code == BTN_DPAD_RIGHT);
-                    bool left = (dev_event_code == BTN_DPAD_LEFT);
-                    bool down = (dev_event_code == BTN_DPAD_DOWN);
-                    bool select = (dev_event_code == BTN_SELECT);
-                    bool start = (dev_event_code == BTN_START);
-                    bool home = (dev_event_code == BTN_MODE);
-                    bool left_shoulder = (dev_event_code == BTN_TL);
-                    bool right_shoulder = (dev_event_code == BTN_TR);
-                    bool north = (dev_event_code == BTN_NORTH);
-                    bool east = (dev_event_code == BTN_EAST);
-                    bool south = (dev_event_code == BTN_SOUTH);
-                    bool west = (dev_event_code == BTN_WEST);
-
-                    if (north && !was_down)
-                    {
-                      printf("north: ");
-                      if (is_released) 
-                      {
-                        printf("was_released");
-                      }
-                      else
-                      {
-                        printf("is_down");
-                      }
-                      printf("\n");
-                      fflush(stdout);
-                    }
-
-                    int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
-                    int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
-
-                    x_offset += stick_x >> 12;
-                    y_offset += stick_y >> 12;
-                  }
-
-                  // TODO(Ryan): hitting keys on different keyboards results in lag
-                  // this seems to be causes by clogging up XPending()
-                  if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
-                  {
-                    bool w = (dev_event_code == KEY_W);
-                    bool a = (dev_event_code == KEY_A);
-                    bool s = (dev_event_code == KEY_S);
-                    bool d = (dev_event_code == KEY_D);
-                    bool q = (dev_event_code == KEY_Q);
-                    bool e = (dev_event_code == KEY_E);
-                    bool up = (dev_event_code == KEY_UP);
-                    bool down = (dev_event_code == KEY_DOWN);
-                    bool left = (dev_event_code == KEY_LEFT);
-                    bool right = (dev_event_code == KEY_RIGHT);
-                    bool escape = (dev_event_code == KEY_ESC);
-                    bool space = (dev_event_code == KEY_SPACE);
-                    bool enter = (dev_event_code == KEY_ENTER);
-                    bool ctrl = (dev_event_code == KEY_LEFTCTRL);
-
-                    if (a && !was_down)
-                    {
-                      printf("a: ");
-                      if (is_released) 
-                      {
-                        printf("was_released");
-                      }
-                      else
-                      {
-                        printf("is_down");
-                      }
-                      printf("\n");
-                      fflush(stdout);
-                    }
-                  }
-                }
-              }
-            }
+            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input);
 
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
 
-            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input);
+            xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
+                                         xrandr_active_crtc.crtc, &xlib_back_buffer,
+                                         xlib_window_width, xlib_window_height);
 
             hhf_old_input = hhf_cur_input;
             hhf_cur_input = {};
@@ -744,15 +718,13 @@ main(int argc, char *argv[])
 
             prev_timespec = end_timespec;
             prev_cycle_count = end_cycle_count;
-
-            xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
-                                         xrandr_active_crtc.crtc, &xlib_back_buffer,
-                                         xlib_window_width, xlib_window_height);
           }
           XFreeEventData(xlib_display, cookie);
         }
       }
-    }
+
+    } 
+
   }
 
   return 0;
