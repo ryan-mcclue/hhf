@@ -86,11 +86,16 @@ enum UDEV_DEVICE_TYPE
   UDEV_DEVICE_TYPE_GAMEPAD,
   UDEV_DEVICE_TYPE_MOUSE,
 };
-struct UdevHotplugDevice
+struct UdevPollDevice
 {
-  char dev_path[64];
-  int fd;
+  UDEV_DEVICE_TYPE type;
+  int hhf_i;
 };
+//struct UdevHotplugDevice
+//{
+//  char dev_path[64];
+//  int fd;
+//};
 #define MAX_PROCESS_FDS 1024
 #define EPOLL_UDEV_MAX_EVENTS 5
 #define MAX_UDEV_DEVICES 32
@@ -100,10 +105,14 @@ struct UdevHotplugDevice
 
 INTERNAL void
 udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
-                         UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS],
-                         UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+                         UdevPollDevice poll_devices[MAX_PROCESS_FDS])
+                         //UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
 {
-  LOCAL_PERSIST int hotplug_device_cursor = 0;
+  // LOCAL_PERSIST int hotplug_device_cursor = 0;
+  LOCAL_PERSIST int hhf_controller_i = 0; 
+  LOCAL_PERSIST int hhf_keyboard_i = 0; 
+  LOCAL_PERSIST int hhf_mouse_i = 0; 
+
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
   char const *dev_prop = \
@@ -130,11 +139,18 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
       event.data.fd = dev_fd;
       epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
 
-      poll_devices[dev_fd] = dev_type;
-      strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
+      UdevPollDevice *dev = &poll_devices[dev_fd];
+      dev->type = dev_type;
+      // TODO(Ryan): Ensure these don't go over max number for that particular
+      // device in HHFInput
+      if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD) dev->hhf_i = hhf_controller_i++;
+      if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD) dev->hhf_i = hhf_keyboard_i++;
+      if (dev_type == UDEV_DEVICE_TYPE_MOUSE) dev->hhf_i = hhf_mouse_i++;
+
+      //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
       // removing a device will cause this to segfault
-      hotplug_devices[hotplug_device_cursor++].fd = dev_fd;
+      //hotplug_devices[hotplug_device_cursor++].fd = dev_fd;
     }
   }
 
@@ -143,8 +159,7 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
 INTERNAL void
 udev_populate_devices(struct udev *udev_obj, int epoll_fd, 
-                      UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS],
-                      UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+                      UdevPollDevice poll_devices[MAX_PROCESS_FDS])
 {
   struct udev_enumerate *udev_enum = udev_enumerate_new(udev_obj);
   if (udev_enum == NULL) BP(NULL);
@@ -163,7 +178,7 @@ udev_populate_devices(struct udev *udev_obj, int epoll_fd,
     struct udev_device *device = udev_device_new_from_syspath(udev_obj, 
                                                               udev_entry_syspath);
 
-    udev_possibly_add_device(epoll_fd, device, poll_devices, hotplug_devices);
+    udev_possibly_add_device(epoll_fd, device, poll_devices);
   }
 
   udev_enumerate_unref(udev_enum);
@@ -411,54 +426,53 @@ udev_process_digital_button(HHFInputButtonState *prev_button_state,
   }
 }
 
-INTERVAL void
-udev_check_hotplug_devices(struct udev_monitor *monitor,
-                           UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS], 
-                           UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
-{
-   int hotplug_fd = udev_monitor_get_fd(monitor);
-   int have_hotplug = 0;
-   do
-   {
-     struct pollfd udev_poll = {};
-     udev_poll.fd = hotplug_fd;
-     udev_poll.events = POLLIN | POLLPRI;
-     have_hotplug = poll(&udev_poll, 1, 0);
-   } while (have_hotplug < 0 && errno == EINTR);
+//INTERVAL void
+//udev_check_hotplug_devices(struct udev_monitor *monitor,
+//                           UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
+//                           UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+//{
+//   int hotplug_fd = udev_monitor_get_fd(monitor);
+//   int have_hotplug = 0;
+//   do
+//   {
+//     struct pollfd udev_poll = {};
+//     udev_poll.fd = hotplug_fd;
+//     udev_poll.events = POLLIN | POLLPRI;
+//     have_hotplug = poll(&udev_poll, 1, 0);
+//   } while (have_hotplug < 0 && errno == EINTR);
+//
+//   if (have_hotplug)
+//   {
+//     struct udev_device *dev = udev_monitor_receive_device(monitor);
+//     const char *action = udev_device_get_action(dev);
+//     if (strcmp(action, "add") == 0)
+//     {
+//       udev_possibly_add_device(epoll_fd, dev, poll_devices, hotplug_devices);  
+//     }
+//     if (strcmp(action, "remove") == 0)
+//     {
+//       // TODO(Ryan): What to do when this is NULL? perhaps its sys first then dev?
+//       const char *dev_path = udev_device_get_devnode(dev);
+//       if (dev_path == NULL) BP(NULL); // call again?
+//       for (int hotplug_device_i = 0; 
+//            hotplug_device_i < MAX_UDEV_DEVICES;
+//            ++hotplug_device_i)
+//       {
+//         UdevHotplugDevice h_dev = hotplug_devices[hotplug_device_i];
+//         if (strcmp(h_dev.dev_path, dev_path) == 0)
+//         {
+//           udev_hotplug_devices[hotplug_device_i] = {};
+//           close(h_dev.fd);
+//           udev_poll_devices[h_dev.fd] = UDEV_DEVICE_TYPE_IGNORE;
+//         }
+//       }
+//     }
+//     udev_device_unref(dev);
+//   }
+//}
 
-   if (have_hotplug)
-   {
-     struct udev_device *dev = udev_monitor_receive_device(monitor);
-     const char *action = udev_device_get_action(dev);
-     if (strcmp(action, "add") == 0)
-     {
-       udev_possibly_add_device(epoll_fd, dev, poll_devices, hotplug_devices);  
-     }
-     if (strcmp(action, "remove") == 0)
-     {
-       // TODO(Ryan): What to do when this is NULL? perhaps its sys first then dev?
-       const char *dev_path = udev_device_get_devnode(dev);
-       if (dev_path == NULL) BP(NULL); // call again?
-       for (int hotplug_device_i = 0; 
-            hotplug_device_i < MAX_UDEV_DEVICES;
-            ++hotplug_device_i)
-       {
-         UdevHotplugDevice h_dev = hotplug_devices[hotplug_device_i];
-         if (strcmp(h_dev.dev_path, dev_path) == 0)
-         {
-           udev_hotplug_devices[hotplug_device_i] = {};
-           close(h_dev.fd);
-           udev_poll_devices[h_dev.fd] = UDEV_DEVICE_TYPE_IGNORE;
-         }
-       }
-     }
-     udev_device_unref(dev);
-   }
-}
-
-INTERVAL void
-udev_check_poll_devices(int epoll_fd,
-                        UDEV_DEVICE_TYPE poll_devices[MAX_PROCESS_FDS], 
+INTERNAL void
+udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
                         HHFInput *prev_input, HHFInput *cur_input)
 {
   struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
@@ -466,7 +480,7 @@ udev_check_poll_devices(int epoll_fd,
   for (int epoll_event_i = 0; epoll_event_i < num_epoll_events; ++epoll_event_i)
   {
     int dev_fd = epoll_events[epoll_event_i].data.fd;
-    UDEV_DEVICE_TYPE dev_type = poll_devices[dev_fd];
+    UdevPollDevice dev = poll_devices[dev_fd];
 
     struct input_event dev_events[4] = {0};
     int dev_event_bytes_read = read(dev_fd, dev_events, sizeof(dev_events));
@@ -484,9 +498,19 @@ udev_check_poll_devices(int epoll_fd,
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
       // TODO(Ryan): Cannot vibrate
-      if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD)
+      if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
       {
-        bool up = (dev_event_code == BTN_DPAD_UP);
+        BP(NULL);
+        HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
+        HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
+
+        cur_controller_state->is_analog = true;
+
+        if (dev_event_code == BTN_DPAD_UP) 
+        {
+          udev_process_digital_button(&prev_controller_state->up, 
+                                      &cur_controller_state->up, is_down);
+        }
         bool right = (dev_event_code == BTN_DPAD_RIGHT);
         bool left = (dev_event_code == BTN_DPAD_LEFT);
         bool down = (dev_event_code == BTN_DPAD_DOWN);
@@ -505,38 +529,23 @@ udev_check_poll_devices(int epoll_fd,
       }
 
       // TODO(Ryan): hitting keys on different keyboards results in lag
-      if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
-      {
-        bool w = (dev_event_code == KEY_W);
-        bool a = (dev_event_code == KEY_A);
-        bool s = (dev_event_code == KEY_S);
-        bool d = (dev_event_code == KEY_D);
-        bool q = (dev_event_code == KEY_Q);
-        bool e = (dev_event_code == KEY_E);
-        bool up = (dev_event_code == KEY_UP);
-        bool down = (dev_event_code == KEY_DOWN);
-        bool left = (dev_event_code == KEY_LEFT);
-        bool right = (dev_event_code == KEY_RIGHT);
-        bool escape = (dev_event_code == KEY_ESC);
-        bool space = (dev_event_code == KEY_SPACE);
-        bool enter = (dev_event_code == KEY_ENTER);
-        bool ctrl = (dev_event_code == KEY_LEFTCTRL);
-
-        if (a && !was_down)
-        {
-          printf("a: ");
-          if (is_released) 
-          {
-            printf("was_released");
-          }
-          else
-          {
-            printf("is_down");
-          }
-          printf("\n");
-          fflush(stdout);
-        }
-      }
+      //if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
+      //{
+      //  bool w = (dev_event_code == KEY_W);
+      //  bool a = (dev_event_code == KEY_A);
+      //  bool s = (dev_event_code == KEY_S);
+      //  bool d = (dev_event_code == KEY_D);
+      //  bool q = (dev_event_code == KEY_Q);
+      //  bool e = (dev_event_code == KEY_E);
+      //  bool up = (dev_event_code == KEY_UP);
+      //  bool down = (dev_event_code == KEY_DOWN);
+      //  bool left = (dev_event_code == KEY_LEFT);
+      //  bool right = (dev_event_code == KEY_RIGHT);
+      //  bool escape = (dev_event_code == KEY_ESC);
+      //  bool space = (dev_event_code == KEY_SPACE);
+      //  bool enter = (dev_event_code == KEY_ENTER);
+      //  bool ctrl = (dev_event_code == KEY_LEFTCTRL);
+      //}
     }
   }
 }
@@ -608,14 +617,14 @@ main(int argc, char *argv[])
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
 
-  UDEV_DEVICE_TYPE udev_poll_devices[MAX_PROCESS_FDS] = {};
-  UdevHotplugDevice udev_hotplug_devices[MAX_UDEV_DEVICES] = {};
+  //UdevHotplugDevice udev_hotplug_devices[MAX_UDEV_DEVICES] = {};
+  UdevPollDevice udev_poll_devices[MAX_PROCESS_FDS] = {};
   int epoll_udev_fd = epoll_create1(0);
-  udev_populate_devices(udev_obj, epoll_udev_fd, udev_poll_devices, udev_hotplug_devices);
+  udev_populate_devices(udev_obj, epoll_udev_fd, udev_poll_devices);
 
-  struct udev_monitor *udev_mon = udev_monitor_new_from_netlink(udev_obj, "udev");
-  udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
-  udev_monitor_enable_receiving(udev_mon);
+  //struct udev_monitor *udev_mon = udev_monitor_new_from_netlink(udev_obj, "udev");
+  //udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
+  //udev_monitor_enable_receiving(udev_mon);
 
   XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
                                                                xlib_root_window);
@@ -649,14 +658,14 @@ main(int argc, char *argv[])
   hhf_sound_buffer.num_samples = pulse_buffer_num_base_samples; 
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
-                               xrandr_active_crtc.crtc, &xlib_back_buffer, xlib_window_width, 
-                               xlib_window_height);
+                               xrandr_active_crtc.crtc, &xlib_back_buffer, 
+                               xlib_window_width, xlib_window_height);
 
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
-  HHFInput hhf_cur_input = {}, hhf_old_input = {};
+  HHFInput hhf_cur_input = {}, hhf_prev_input = {};
 
   bool want_to_run = true;
   int x_offset = 0, y_offset = 0;
@@ -680,14 +689,15 @@ main(int argc, char *argv[])
         break;
       }
 
-      udev_check_hotplug_devices();
+      // udev_check_hotplug_devices();
 
       Window xlib_focused_window = 0;
       int xlib_focused_window_state = 0;
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
       if (xlib_focused_window == xlib_window)
       {
-        udev_check_poll_devices();
+        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
+                                &hhf_cur_input);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -707,7 +717,7 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
-            hhf_old_input = hhf_cur_input;
+            hhf_prev_input = hhf_cur_input;
             hhf_cur_input = {};
             
             u64 end_cycle_count = __rdtsc();
