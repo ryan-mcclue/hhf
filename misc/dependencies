@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: zlib-acknowledgement 
 
 glibc_debugging="libc6-dbg glibc-source"
+# udevamd --query=all -n input/event10
 device_debugging="evtest udevadm fftest"
 # NOTE(Ryan): Principally xrandr cmd-line tool, xdpyinfo
 x11_debugging="x11-xserver-utils"

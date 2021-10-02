@@ -91,7 +91,7 @@ struct UdevHotplugDevice
   char dev_path[64];
   int fd;
 };
-#define MAX_PROCESS_FDS RLIMIT_NOFILE
+#define MAX_PROCESS_FDS 1024
 #define EPOLL_UDEV_MAX_EVENTS 5
 #define MAX_UDEV_DEVICES 32
 
@@ -399,6 +399,18 @@ xrandr_get_active_crtc(Display *display, Window root_window)
   return active_crtc;
 }
 
+INTERNAL void
+evdev_process_digital_button(HHFInputButtonState *prev_button_state,
+                             HHFInputButtonState *cur_button_state,
+                             bool ended_down)
+{
+  cur_button_state->ended_down = ended_down;
+  if (cur_button_state->ended_down != prev_button_state->ended_down)
+  {
+    cur_button_state->half_transition_count++;
+  }
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -487,6 +499,11 @@ main(int argc, char *argv[])
   pulse_spec.rate = pulse_samples_per_second;
   pulse_spec.channels = pulse_num_channels;
 
+  // TODO(Ryan):
+  // this incurs a 67Mib allocation.
+  // libpulse allocates an additional 200Mib.
+  // why!?
+  // frequency seems to change after a period of long time running
   pa_simple *pulse_player = pa_simple_new(NULL, "HHF", PA_STREAM_PLAYBACK, NULL, 
                                           "HHF Sound", &pulse_spec, NULL, NULL,
                                           &pulse_error_code);
@@ -509,10 +526,28 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
+  HHFInput hhf_cur_input = {}, hhf_old_input = {};
+
   bool want_to_run = true;
   int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
+    /* XCheckTypedWindowEvent()
+     XCheckTypedEvent()
+
+      XEvent xlib_event = {};
+      while (XPending(xlib_display) > 0)
+      {
+        XNextEvent(xlib_display, &xlib_event);
+        if (xlib_event.type == GenericEvent)
+        XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
+        break;
+      } 
+
+      // update
+      // present
+    */
+    
     XEvent xlib_event = {};
     while (XPending(xlib_display) > 0)
     {
@@ -562,6 +597,7 @@ main(int argc, char *argv[])
                 }
                 if (strcmp(action, "remove") == 0)
                 {
+                  // TODO(Ryan): What to do when this is NULL?
                   const char *dev_path = udev_device_get_devnode(dev);
                   for (int hotplug_device_i = 0; 
                        hotplug_device_i < MAX_UDEV_DEVICES;
@@ -615,6 +651,7 @@ main(int argc, char *argv[])
                   bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
                   bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
+                  // TODO(Ryan): Cannot vibrate
                   if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD)
                   {
                     bool up = (dev_event_code == BTN_DPAD_UP);
@@ -653,6 +690,8 @@ main(int argc, char *argv[])
                     y_offset += stick_y >> 12;
                   }
 
+                  // TODO(Ryan): hitting keys on different keyboards results in lag
+                  // this seems to be causes by clogging up XPending()
                   if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
                   {
                     bool w = (dev_event_code == KEY_W);
@@ -689,10 +728,13 @@ main(int argc, char *argv[])
               }
             }
 
-            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer);
-
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
+
+            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input);
+
+            hhf_old_input = hhf_cur_input;
+            hhf_cur_input = {};
             
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};

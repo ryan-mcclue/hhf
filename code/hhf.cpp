@@ -44,7 +44,7 @@ output_sound(HHFSoundBuffer *sound_buffer)
 }
 
 void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer)
+hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input)
 {
   LOCAL_PERSIST int x_offset = 0;
   LOCAL_PERSIST int y_offset = 0;
