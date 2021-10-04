@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cctype>
 #include <climits>
+#include <cinttypes>
 
 #define INTERNAL static
 #define GLOBAL static
@@ -493,24 +494,47 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       int dev_event_code = dev_events[dev_event_i].code;
       int dev_event_value = dev_events[dev_event_i].value;
 
-      bool is_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
-      bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
-      bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
+      // IMPORTANT(Ryan): This is to ignore the proceeding EV_SYN that would reset the value
+      LOCAL_PERSIST bool was_released = false;
+      if (dev_event_type == EV_KEY)
+      {
+        was_released = (dev_event_value == 0);
+      }
+
+      LOCAL_PERSIST bool is_down = false;
+      if (dev_event_type == EV_ABS)
+      {
+        is_down = (dev_event_value != 0);
+      }
+      if (dev_event_type == EV_KEY)
+      {
+        is_down = (dev_event_value == 1);
+      }
+
+      LOCAL_PERSIST bool was_down = false;
+      if (dev_event_type == EV_KEY)
+      {
+        was_released = (dev_event_value == 2);
+      }
+        printf("type: %d, code: %d, value: %d\n", dev_event_type, dev_event_code, dev_event_value);
 
       // TODO(Ryan): Cannot vibrate
       if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
       {
-        BP(NULL);
+
         HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
         HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
         cur_controller_state->is_analog = true;
 
-        if (dev_event_code == BTN_DPAD_UP) 
+        // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
+        if ((dev_event_code == ABS_HAT0X && dev_event_value < 0) ||
+            (dev_event_code == BTN_DPAD_LEFT))
         {
-          udev_process_digital_button(&prev_controller_state->up, 
-                                      &cur_controller_state->up, is_down);
+          udev_process_digital_button(&prev_controller_state->left, 
+                                      &cur_controller_state->left, true);
         }
+
         bool right = (dev_event_code == BTN_DPAD_RIGHT);
         bool left = (dev_event_code == BTN_DPAD_LEFT);
         bool down = (dev_event_code == BTN_DPAD_DOWN);
@@ -526,26 +550,28 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
 
         int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
         int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
+
       }
 
       // TODO(Ryan): hitting keys on different keyboards results in lag
-      //if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD)
-      //{
-      //  bool w = (dev_event_code == KEY_W);
-      //  bool a = (dev_event_code == KEY_A);
-      //  bool s = (dev_event_code == KEY_S);
-      //  bool d = (dev_event_code == KEY_D);
-      //  bool q = (dev_event_code == KEY_Q);
-      //  bool e = (dev_event_code == KEY_E);
-      //  bool up = (dev_event_code == KEY_UP);
-      //  bool down = (dev_event_code == KEY_DOWN);
-      //  bool left = (dev_event_code == KEY_LEFT);
-      //  bool right = (dev_event_code == KEY_RIGHT);
-      //  bool escape = (dev_event_code == KEY_ESC);
-      //  bool space = (dev_event_code == KEY_SPACE);
-      //  bool enter = (dev_event_code == KEY_ENTER);
-      //  bool ctrl = (dev_event_code == KEY_LEFTCTRL);
-      //}
+      if (dev.type == UDEV_DEVICE_TYPE_KEYBOARD)
+      {
+
+        bool w = (dev_event_code == KEY_W);
+        bool a = (dev_event_code == KEY_A);
+        bool s = (dev_event_code == KEY_S);
+        bool d = (dev_event_code == KEY_D);
+        bool q = (dev_event_code == KEY_Q);
+        bool e = (dev_event_code == KEY_E);
+        bool up = (dev_event_code == KEY_UP);
+        bool down = (dev_event_code == KEY_DOWN);
+        bool left = (dev_event_code == KEY_LEFT);
+        bool right = (dev_event_code == KEY_RIGHT);
+        bool escape = (dev_event_code == KEY_ESC);
+        bool space = (dev_event_code == KEY_SPACE);
+        bool enter = (dev_event_code == KEY_ENTER);
+        bool ctrl = (dev_event_code == KEY_LEFTCTRL);
+      }
     }
   }
 }
@@ -717,6 +743,7 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
+            // can't just set to zero, have to do a more considered swap
             hhf_prev_input = hhf_cur_input;
             hhf_cur_input = {};
             

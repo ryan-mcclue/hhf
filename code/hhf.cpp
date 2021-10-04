@@ -51,7 +51,7 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
   HHFInputController controller = input->controllers[0];
   if (controller.is_analog)
   {
-    if (controller.up.ended_down)
+    if (controller.left.ended_down)
     {
       x_offset += 2;
     }
