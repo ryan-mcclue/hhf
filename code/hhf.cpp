@@ -49,12 +49,9 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
   LOCAL_PERSIST int x_offset = 0;
   LOCAL_PERSIST int y_offset = 0;
   HHFInputController controller = input->controllers[0];
-  if (controller.is_analog)
+  if (controller.left.ended_down)
   {
-    if (controller.left.ended_down)
-    {
-      x_offset += 2;
-    }
+    x_offset += 2;
   }
   render_weird_gradient(back_buffer, x_offset, y_offset);
   output_sound(sound_buffer);

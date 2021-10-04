@@ -23,6 +23,7 @@ struct HHFInputButtonState
   bool ended_down;
 };
 
+#define HHF_INPUT_NUM_CONTROLLER_BUTTONS 6
 struct HHFInputController
 {
   bool is_analog;
@@ -32,7 +33,7 @@ struct HHFInputController
 
   union
   {
-    HHFInputButtonState buttons[6];
+    HHFInputButtonState buttons[HHF_INPUT_NUM_CONTROLLER_BUTTONS];
     struct
     {
       HHFInputButtonState up;
@@ -45,9 +46,10 @@ struct HHFInputController
   };
 };
 
+#define HHF_INPUT_MAX_NUM_CONTROLLERS 4
 struct HHFInput
 {
-  HHFInputController controllers[4];
+  HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
 void

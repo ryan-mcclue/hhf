@@ -110,9 +110,7 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
                          //UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
 {
   // LOCAL_PERSIST int hotplug_device_cursor = 0;
-  LOCAL_PERSIST int hhf_controller_i = 0; 
-  LOCAL_PERSIST int hhf_keyboard_i = 0; 
-  LOCAL_PERSIST int hhf_mouse_i = 0; 
+  LOCAL_PERSIST int hhf_i = 0;
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
@@ -144,9 +142,7 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
       dev->type = dev_type;
       // TODO(Ryan): Ensure these don't go over max number for that particular
       // device in HHFInput
-      if (dev_type == UDEV_DEVICE_TYPE_GAMEPAD) dev->hhf_i = hhf_controller_i++;
-      if (dev_type == UDEV_DEVICE_TYPE_KEYBOARD) dev->hhf_i = hhf_keyboard_i++;
-      if (dev_type == UDEV_DEVICE_TYPE_MOUSE) dev->hhf_i = hhf_mouse_i++;
+      if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) dev->hhf_i = hhf_i++;
 
       //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
@@ -494,50 +490,54 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       int dev_event_code = dev_events[dev_event_i].code;
       int dev_event_value = dev_events[dev_event_i].value;
 
-      // IMPORTANT(Ryan): This is to ignore the proceeding EV_SYN that would reset the value
-      LOCAL_PERSIST bool was_released = false;
-      if (dev_event_type == EV_KEY)
-      {
-        was_released = (dev_event_value == 0);
-      }
+      printf("type: %d, code: %d, value: %d\n", dev_event_type, dev_event_code, dev_event_value);
+      
+      if (dev_event_type == EV_SYN) continue;
 
-      LOCAL_PERSIST bool is_down = false;
-      if (dev_event_type == EV_ABS)
-      {
-        is_down = (dev_event_value != 0);
-      }
-      if (dev_event_type == EV_KEY)
-      {
-        is_down = (dev_event_value == 1);
-      }
-
-      LOCAL_PERSIST bool was_down = false;
-      if (dev_event_type == EV_KEY)
-      {
-        was_released = (dev_event_value == 2);
-      }
-        printf("type: %d, code: %d, value: %d\n", dev_event_type, dev_event_code, dev_event_value);
+      bool was_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
+      bool is_down = (dev_event_type == EV_ABS ? dev_event_value == 1 : false);
+      bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
       // TODO(Ryan): Cannot vibrate
       if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
       {
-
         HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
         HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
+        // Need to persist this
         cur_controller_state->is_analog = true;
 
         // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
-        if ((dev_event_code == ABS_HAT0X && dev_event_value < 0) ||
-            (dev_event_code == BTN_DPAD_LEFT))
+        if (dev_event_code == BTN_DPAD_LEFT)
         {
           udev_process_digital_button(&prev_controller_state->left, 
-                                      &cur_controller_state->left, true);
+                                      &cur_controller_state->left, is_down);
         }
-
         bool right = (dev_event_code == BTN_DPAD_RIGHT);
         bool left = (dev_event_code == BTN_DPAD_LEFT);
         bool down = (dev_event_code == BTN_DPAD_DOWN);
+
+        if (dev_event_code == ABS_HAT0X)
+        {
+          if (dev_event_value < 0)
+          {
+            udev_process_digital_button(&prev_controller_state->left, 
+                                        &cur_controller_state->left, true);
+          }
+          else if (dev_event_value > 0) 
+          {
+            udev_process_digital_button(&prev_controller_state->right, 
+                                        &cur_controller_state->right, true);
+          }
+          else
+          {
+            udev_process_digital_button(&prev_controller_state->left, 
+                                        &cur_controller_state->left, false);
+            udev_process_digital_button(&prev_controller_state->right, 
+                                        &cur_controller_state->right, false);
+          }
+        }
+
         bool select = (dev_event_code == BTN_SELECT);
         bool start = (dev_event_code == BTN_START);
         bool home = (dev_event_code == BTN_MODE);
@@ -717,6 +717,9 @@ main(int argc, char *argv[])
 
       // udev_check_hotplug_devices();
 
+        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
+                                &hhf_cur_input);
+
       Window xlib_focused_window = 0;
       int xlib_focused_window_state = 0;
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
@@ -743,9 +746,22 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
-            // can't just set to zero, have to do a more considered swap
             hhf_prev_input = hhf_cur_input;
             hhf_cur_input = {};
+            for (int controller_i = 0; 
+                 controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS;
+                 controller_i++)
+            {
+              HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];
+              HHFInputController *prev_controller = &hhf_prev_input.controllers[controller_i];
+              for (int controller_button_i = 0; 
+                  controller_button_i < HHF_INPUT_NUM_CONTROLLER_BUTTONS;
+                  controller_button_i++)
+              {
+                cur_controller->buttons[controller_button_i].ended_down = \
+                  prev_controller->buttons[controller_button_i].ended_down;
+              }
+            }
             
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
