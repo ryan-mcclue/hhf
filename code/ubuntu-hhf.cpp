@@ -53,6 +53,13 @@ INTERNAL void __ebp(char const *msg)
 #define ARRAY_LEN(arr) \
   (sizeof(arr)/sizeof(arr[0]))
 
+#define KILOBYTES(n) \
+  ((n) * 1024UL)
+#define MEGABYTES(n) \
+  ((n) * KILOBYTES(n))
+#define GIGABYTES(n) \
+  ((n) * MEGABYTES(n))
+
 #include "hhf.h"
 #include "hhf.cpp"
 
@@ -688,6 +695,22 @@ main(int argc, char *argv[])
   hhf_sound_buffer.samples = pulse_buffer;
   hhf_sound_buffer.num_samples = pulse_buffer_num_base_samples; 
 
+  HHFMemory hhf_memory = {};
+  // TODO(Ryan): Allocate based on information from sysinfo()
+  u64 hhf_permanent_size = MEGABYTES(64);
+  u64 hhf_transient_size = GIGABYTES(2);
+  u64 hhf_memory_raw_size = hhf_permanent_size + hhf_transient_size;
+  // TODO(Ryan): Ensure that this is cleared to zero and actually committed with memset()
+  void *hhf_memory_raw = mmap(NULL, hhf_memory_raw_size, PROT_READ | PROT_WRITE, 
+                              MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+  if (hhf_memory_raw == MAP_FAILED) EBP(NULL);
+
+  memset(hhf_memory_raw, 0x00, hhf_memory_raw_size);
+  hhf_memory.permanent = (u8 *)hhf_memory_raw;
+  hhf_memory.permanent_size = hhf_permanent_size;
+  hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
+  hhf_memory.permanent_size = hhf_transient_size;
+
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
@@ -721,9 +744,6 @@ main(int argc, char *argv[])
 
       // udev_check_hotplug_devices();
 
-        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
-                                &hhf_cur_input);
-
       Window xlib_focused_window = 0;
       int xlib_focused_window_state = 0;
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
@@ -741,7 +761,7 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input);
+            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
 
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));

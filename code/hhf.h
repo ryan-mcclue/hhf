@@ -52,6 +52,24 @@ struct HHFInput
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
+struct HHFMemory
+{
+  bool is_initialized;
+
+  // NOTE(Ryan): Required to be cleared to zero
+  u8 *permanent;
+  u64 permanent_size;
+  u8 *transient;
+  u64 transient_size;
+};
+
 void
 hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer,
-                      HHFInput *input);
+                      HHFInput *input, HHFMemory *memory);
+
+// TODO(Ryan): The platform layer does not need to know about this
+struct HHFState
+{
+  int x_offset;
+  int y_offset;
+};
