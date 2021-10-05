@@ -31,7 +31,7 @@ typedef u32 b32;
 typedef float r32;
 typedef double r64;
 
-#if defined(HHF_DEV)
+#if defined(HHF_SLOW)
 INTERNAL void __bp(char const *msg)
 { 
   if (msg != NULL) printf("BP: %s\n", msg);
@@ -45,9 +45,11 @@ INTERNAL void __ebp(char const *msg)
 }
 #define BP(msg) __bp(msg)
 #define EBP(msg) __ebp(msg)
+#define ASSERT(cond) if (!(cond)) {BP("ASSERT");}
 #else
 #define BP(msg)
 #define EBP(msg)
+#define ASSERT(cond)
 #endif
 
 #define ARRAY_LEN(arr) \
@@ -59,6 +61,8 @@ INTERNAL void __ebp(char const *msg)
   ((n) * KILOBYTES(n))
 #define GIGABYTES(n) \
   ((n) * MEGABYTES(n))
+#define TERABYTES(n) \
+  ((n) * GIGABYTES(n))
 
 #include "hhf.h"
 #include "hhf.cpp"
@@ -700,12 +704,17 @@ main(int argc, char *argv[])
   u64 hhf_permanent_size = MEGABYTES(64);
   u64 hhf_transient_size = GIGABYTES(2);
   u64 hhf_memory_raw_size = hhf_permanent_size + hhf_transient_size;
-  // TODO(Ryan): Ensure that this is cleared to zero and actually committed with memset()
-  void *hhf_memory_raw = mmap(NULL, hhf_memory_raw_size, PROT_READ | PROT_WRITE, 
-                              MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+#if defined(HHF_INTERNAL)
+  void *hhf_memory_raw_base_addr = (void *)TERABYTES(2);
+#else
+  void *hhf_memory_raw_base_addr = NULL;
+#endif
+  void *hhf_memory_raw = mmap(hhf_memory_raw_base_addr, hhf_memory_raw_size, 
+                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
   if (hhf_memory_raw == MAP_FAILED) EBP(NULL);
 
   memset(hhf_memory_raw, 0x00, hhf_memory_raw_size);
+
   hhf_memory.permanent = (u8 *)hhf_memory_raw;
   hhf_memory.permanent_size = hhf_permanent_size;
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;

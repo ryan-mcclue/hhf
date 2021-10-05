@@ -46,6 +46,8 @@ output_sound(HHFSoundBuffer *sound_buffer)
 void
 hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory)
 {
+  ASSERT(sizeof(HHFState) <= memory->permanent_size);
+
   HHFState *state = (HHFState *)memory->permanent;
   if (!memory->is_initialized)
   {
