@@ -106,8 +106,8 @@ struct UdevPollDevice
 
 INTERNAL void
 udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
-                         UdevPollDevice poll_devices[MAX_PROCESS_FDS])
-                         //UdevHotplugDevice hotplug_devices[MAX_UDEV_DEVICES])
+                         UdevPollDevice poll_devices[MAX_PROCESS_FDS],
+                         HHFInput *input)
 {
   // LOCAL_PERSIST int hotplug_device_cursor = 0;
   LOCAL_PERSIST int hhf_i = 0;
@@ -142,7 +142,11 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
       dev->type = dev_type;
       // TODO(Ryan): Ensure these don't go over max number for that particular
       // device in HHFInput
-      if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) dev->hhf_i = hhf_i++;
+      if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
+      {
+        input->controllers[hhf_i].is_analog = true;
+        dev->hhf_i = hhf_i++;
+      }
 
       //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
@@ -156,7 +160,8 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
 INTERNAL void
 udev_populate_devices(struct udev *udev_obj, int epoll_fd, 
-                      UdevPollDevice poll_devices[MAX_PROCESS_FDS])
+                      UdevPollDevice poll_devices[MAX_PROCESS_FDS],
+                      HHFInput *hhf_input)
 {
   struct udev_enumerate *udev_enum = udev_enumerate_new(udev_obj);
   if (udev_enum == NULL) BP(NULL);
@@ -175,7 +180,7 @@ udev_populate_devices(struct udev *udev_obj, int epoll_fd,
     struct udev_device *device = udev_device_new_from_syspath(udev_obj, 
                                                               udev_entry_syspath);
 
-    udev_possibly_add_device(epoll_fd, device, poll_devices);
+    udev_possibly_add_device(epoll_fd, device, poll_devices, hhf_input);
   }
 
   udev_enumerate_unref(udev_enum);
@@ -504,8 +509,6 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
         HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
         HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
-        // Need to persist this
-        cur_controller_state->is_analog = true;
 
         // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
         if (dev_event_code == BTN_DPAD_LEFT)
@@ -640,13 +643,15 @@ main(int argc, char *argv[])
   hhf_back_buffer.height = xlib_back_buffer.height;
   hhf_back_buffer.memory = xlib_back_buffer.memory;
 
+  HHFInput hhf_cur_input = {}, hhf_prev_input = {};
+
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
 
   //UdevHotplugDevice udev_hotplug_devices[MAX_UDEV_DEVICES] = {};
   UdevPollDevice udev_poll_devices[MAX_PROCESS_FDS] = {};
   int epoll_udev_fd = epoll_create1(0);
-  udev_populate_devices(udev_obj, epoll_udev_fd, udev_poll_devices);
+  udev_populate_devices(udev_obj, epoll_udev_fd, udev_poll_devices, &hhf_cur_input);
 
   //struct udev_monitor *udev_mon = udev_monitor_new_from_netlink(udev_obj, "udev");
   //udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
@@ -691,7 +696,6 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
-  HHFInput hhf_cur_input = {}, hhf_prev_input = {};
 
   bool want_to_run = true;
   int x_offset = 0, y_offset = 0;
@@ -754,6 +758,7 @@ main(int argc, char *argv[])
             {
               HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];
               HHFInputController *prev_controller = &hhf_prev_input.controllers[controller_i];
+              cur_controller->is_analog = prev_controller->is_analog;
               for (int controller_button_i = 0; 
                   controller_button_i < HHF_INPUT_NUM_CONTROLLER_BUTTONS;
                   controller_button_i++)
