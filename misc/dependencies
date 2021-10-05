@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: zlib-acknowledgement 
 
 glibc_debugging="libc6-dbg glibc-source"
+# udevamd --query=all -n input/event10
 device_debugging="evtest udevadm fftest"
 # NOTE(Ryan): Principally xrandr cmd-line tool, xdpyinfo
 x11_debugging="x11-xserver-utils"
@@ -12,9 +13,14 @@ essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev libudev-dev l
 
 sudo apt install $essential
 
-# This is a reason to use udev to handle opening for us
+# NOTE(Ryan): Remove user from group with $(deluser ryan input)
 member_of_input="$(id -nG "$USER" | grep "input")"
 if test ! "$member_of_input"; then
   usermod -a "$USER" -G input
   printf "\n\nMust log out and log back in for user to access evdev\n"
 fi
+
+# NOTE(Ryan): For intel vtune
+sudo sh -c 'echo kernel.perf_event_paranoid=0 >> /etc/sysctl.d/local.conf'
+sudo sh -c 'echo kernel.yama.ptrace_scope=0 >> /etc/sysctl.d/local.conf'
+sudo sh -c 'echo kernel.kptr_restrict=0 >> /etc/sysctl.d/local.conf'

@@ -44,11 +44,28 @@ output_sound(HHFSoundBuffer *sound_buffer)
 }
 
 void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer)
+hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory)
 {
-  LOCAL_PERSIST int x_offset = 0;
-  LOCAL_PERSIST int y_offset = 0;
-  render_weird_gradient(back_buffer, x_offset, y_offset);
+  ASSERT(sizeof(HHFState) <= memory->permanent_size);
+
+  HHFState *state = (HHFState *)memory->permanent;
+  if (!memory->is_initialized)
+  {
+    state->x_offset = 0;
+    state->y_offset = 0;
+    memory->is_initialized = true;
+  }
+
+  HHFInputController controller = input->controllers[0];
+  if (controller.is_analog)
+  {
+    if (controller.left.ended_down)
+    {
+      state->x_offset += 2;
+    }
+  }
+
+  render_weird_gradient(back_buffer, state->x_offset, state->y_offset);
+
   output_sound(sound_buffer);
-  x_offset += 2;
 }
