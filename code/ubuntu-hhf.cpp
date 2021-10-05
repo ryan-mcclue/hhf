@@ -77,6 +77,7 @@ INTERNAL void __ebp(char const *msg)
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
@@ -589,6 +590,81 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
     }
   }
 }
+
+// TODO(Ryan): Avoid round tripping by writing to a queue
+// Introduce streaming, i.e background loading
+typedef struct {
+  void *contents;
+  size_t size;
+  int errno_code;
+} ReadFileResult;
+
+void
+free_file_memory(ReadFileResult *file_result)
+{
+  free(file_result->contents);
+}
+
+// TODO(Ryan): Remove dynamic memory allocation here and obtain from memory pool
+ReadFileResult
+read_entire_file(char *file_name)
+{
+    ReadFileResult result = {0};
+
+    int open_res = open(file_name, O_RDONLY); 
+    if (open_res < 0) 
+    {
+      EBP(NULL);
+      result.errno_code = errno; 
+      goto end;
+    }
+    
+    int file_fd = open_res;
+
+    struct stat file_status = {0};
+    int fstat_res = fstat(file_fd, &file_status);
+    if (fstat_res < 0) 
+    {
+      EBP(NULL);
+      result.errno_code = errno; 
+      goto end_open;
+    }
+
+    result.contents = malloc(file_status.st_size);
+    if (result.contents == NULL)
+    {
+      EBP(NULL);
+      result.errno_code = errno;
+      goto end_open;
+    }
+    result.size = file_status.st_size;
+
+    size_t bytes_to_read = file_status.st_size;
+    u8 *byte_location = (u8 *)result.contents;
+    while (bytes_to_read > 0) 
+    {
+      int read_res = read(file_fd, byte_location, bytes_to_read); 
+      if (read_res < 0) 
+      {
+        EBP(NULL);
+        result.errno_code = errno;
+        free(result.contents);
+        goto end_open;
+      }
+      else
+      {
+        int bytes_read = read_res;
+        bytes_to_read -= bytes_read;
+        byte_location += bytes_read;
+      }
+    }
+
+end_open:
+  close(file_fd); 
+end:
+  return result;
+}
+
 
 int
 main(int argc, char *argv[])
