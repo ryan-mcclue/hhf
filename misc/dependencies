@@ -13,7 +13,7 @@ essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev libudev-dev l
 
 sudo apt install $essential
 
-# This is a reason to use udev to handle opening for us
+# NOTE(Ryan): Remove user from group with $(deluser ryan input)
 member_of_input="$(id -nG "$USER" | grep "input")"
 if test ! "$member_of_input"; then
   usermod -a "$USER" -G input
