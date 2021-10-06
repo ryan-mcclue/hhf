@@ -533,65 +533,110 @@ hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result)
   free(file_result->contents);
 }
 
+// TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
+int
+hhf_platform_write_entire_file(char const *file_name, size_t size, void *memory)
+{
+  int result = 0;
+
+  size_t bytes_to_write = 0;
+  u8 *byte_location = NULL;
+  int file_fd = 0;
+
+  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC); 
+  if (open_res < 0) 
+  {
+    EBP(NULL);
+    result = errno;
+    goto end;
+  }
+  file_fd = open_res;
+
+  bytes_to_write = size;
+  byte_location = (u8 *)memory;
+  while (bytes_to_write > 0) 
+  {
+    int write_res = write(file_fd, byte_location, bytes_to_write); 
+    if (write_res < 0) 
+    {
+      EBP(NULL);
+      result = errno;
+      goto end_open;
+    }
+    else
+    {
+      int bytes_written = write_res;
+      bytes_to_write -= bytes_written;
+      byte_location += bytes_written;
+    }
+  }
+  // IMPORTANT(Ryan): Allow other programs to use the files created inside the debugger
+  fchmod(file_fd, S_IROTH | S_IWOTH);
+end_open:
+  close(file_fd); 
+end:
+  return result;
+}
+
 // TODO(Ryan): Remove dynamic memory allocation here and obtain from memory pool
 // Avoid round tripping by writing to a queue
 // Introduce streaming, i.e background loading
 HHFPlatformReadFileResult
 hhf_platform_read_entire_file(char const *file_name)
 {
-    HHFPlatformReadFileResult result = {0};
+  HHFPlatformReadFileResult result = {0};
 
-    // IMPORTANT(Ryan): Require forward declarations to avoid g++ error of jumping over init
-    size_t bytes_to_read = 0;
-    u8 *byte_location = NULL;
-    int file_fd = 0, fstat_res = 0;
-    struct stat file_status = {0};
+  // IMPORTANT(Ryan): Require forward declarations to avoid g++ error of jumping over init
+  size_t bytes_to_read = 0;
+  u8 *byte_location = NULL;
+  int file_fd = 0, fstat_res = 0;
+  struct stat file_status = {0};
 
-    int open_res = open(file_name, O_RDONLY); 
-    if (open_res < 0) 
-    {
-      EBP(NULL);
-      result.errno_code = errno; 
-      goto end;
-    }
-    file_fd = open_res;
+  int open_res = open(file_name, O_RDONLY); 
+  if (open_res < 0) 
+  {
+    EBP(NULL);
+    result.errno_code = errno; 
+    goto end;
+  }
+  file_fd = open_res;
 
-    fstat_res = fstat(file_fd, &file_status);
-    if (fstat_res < 0) 
-    {
-      EBP(NULL);
-      result.errno_code = errno; 
-      goto end_open;
-    }
+  fstat_res = fstat(file_fd, &file_status);
+  if (fstat_res < 0) 
+  {
+    EBP(NULL);
+    result.errno_code = errno; 
+    goto end_open;
+  }
 
-    result.contents = malloc(file_status.st_size);
-    if (result.contents == NULL)
+  result.contents = malloc(file_status.st_size);
+  if (result.contents == NULL)
+  {
+    EBP(NULL);
+    result.errno_code = errno;
+    goto end_open;
+  }
+  result.size = file_status.st_size;
+
+  bytes_to_read = file_status.st_size;
+  byte_location = (u8 *)result.contents;
+  while (bytes_to_read > 0) 
+  {
+    int read_res = read(file_fd, byte_location, bytes_to_read); 
+    if (read_res < 0) 
     {
       EBP(NULL);
       result.errno_code = errno;
+      free(result.contents);
       goto end_open;
     }
-    result.size = file_status.st_size;
-
-    bytes_to_read = file_status.st_size;
-    byte_location = (u8 *)result.contents;
-    while (bytes_to_read > 0) 
+    else
     {
-      int read_res = read(file_fd, byte_location, bytes_to_read); 
-      if (read_res < 0) 
-      {
-        EBP(NULL);
-        result.errno_code = errno;
-        free(result.contents);
-        goto end_open;
-      }
-      else
-      {
-        int bytes_read = read_res;
-        bytes_to_read -= bytes_read;
-        byte_location += bytes_read;
-      }
+      int bytes_read = read_res;
+      bytes_to_read -= bytes_read;
+      byte_location += bytes_read;
     }
+  }
 end_open:
   close(file_fd); 
 end:

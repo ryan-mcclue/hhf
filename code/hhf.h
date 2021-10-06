@@ -85,6 +85,9 @@ hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result);
 
 HHFPlatformReadFileResult
 hhf_platform_read_entire_file(char const *file_name);
+
+int
+hhf_platform_write_entire_file(char const *file_name, size_t size, void *memory);
 #endif
 
 struct HHFBackBuffer
