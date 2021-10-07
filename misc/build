@@ -11,7 +11,9 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedant
 
 # TODO(Ryan): Build for arm and test with qemu? 
 
-# TODO(Ryan): Use virt-manager for other distributions
+# TODO(Ryan): Use virt-manager for other distributions.
+# Base other distribution on steam hardware survey?
+
 # TODO(Ryan): For kernel, compile with oldest LTS?
 # Libc is forwards-compatible, compile with oldest libc determined with objdump. 
 # Although staticallyy linking with musl-libc possible, may cause issues for dependencies  

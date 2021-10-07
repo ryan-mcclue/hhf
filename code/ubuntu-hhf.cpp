@@ -451,13 +451,12 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       bool is_down = (dev_event_type == EV_ABS ? dev_event_value == 1 : false);
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
+      HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
+      HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
+
       // TODO(Ryan): Cannot vibrate
       if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
       {
-        HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
-        HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
-
-
         // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
         if (dev_event_code == BTN_DPAD_LEFT)
         {
@@ -507,16 +506,18 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       // TODO(Ryan): hitting keys on different keyboards results in lag
       if (dev.type == UDEV_DEVICE_TYPE_KEYBOARD)
       {
-
+        if (dev_event_code == KEY_A)
+        {
+          udev_process_digital_button(&prev_controller_state->left, 
+                                      &cur_controller_state->left, is_down);
+        }
         bool w = (dev_event_code == KEY_W);
-        bool a = (dev_event_code == KEY_A);
         bool s = (dev_event_code == KEY_S);
         bool d = (dev_event_code == KEY_D);
         bool q = (dev_event_code == KEY_Q);
         bool e = (dev_event_code == KEY_E);
         bool up = (dev_event_code == KEY_UP);
         bool down = (dev_event_code == KEY_DOWN);
-        bool left = (dev_event_code == KEY_LEFT);
         bool right = (dev_event_code == KEY_RIGHT);
         bool escape = (dev_event_code == KEY_ESC);
         bool space = (dev_event_code == KEY_SPACE);
@@ -782,8 +783,7 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
-
-  bool want_to_run = true;
+  bool want_to_run = true, input_passed_to_hhf = false;
   int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
@@ -812,8 +812,7 @@ main(int argc, char *argv[])
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
       if (xlib_focused_window == xlib_window)
       {
-        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
-                                &hhf_cur_input);
+        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, &hhf_cur_input);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -825,6 +824,7 @@ main(int argc, char *argv[])
           if (cookie->evtype == PresentCompleteNotify)
           {
             hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
+            input_passed_to_hhf = true;
 
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
@@ -833,25 +833,6 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
-            // TODO(Ryan): Swap again outside this loop to handle polling for transition counts
-            hhf_prev_input = hhf_cur_input;
-            hhf_cur_input = {};
-            for (int controller_i = 0; 
-                 controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS;
-                 controller_i++)
-            {
-              HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];
-              HHFInputController *prev_controller = &hhf_prev_input.controllers[controller_i];
-              cur_controller->is_analog = prev_controller->is_analog;
-              for (int controller_button_i = 0; 
-                  controller_button_i < HHF_INPUT_NUM_CONTROLLER_BUTTONS;
-                  controller_button_i++)
-              {
-                cur_controller->buttons[controller_button_i].ended_down = \
-                  prev_controller->buttons[controller_button_i].ended_down;
-              }
-            }
-            
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
@@ -863,6 +844,27 @@ main(int argc, char *argv[])
           }
           XFreeEventData(xlib_display, cookie);
         }
+      }
+
+      // NOTE(Ryan): Preserve transition count if not passed to hhf
+      hhf_prev_input = hhf_cur_input;
+      if (input_passed_to_hhf)
+      {
+        hhf_cur_input = {};
+        for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; controller_i++)
+        {
+          HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];
+          HHFInputController *prev_controller = &hhf_prev_input.controllers[controller_i];
+          cur_controller->is_analog = prev_controller->is_analog;
+          for (int controller_button_i = 0; 
+               controller_button_i < HHF_INPUT_NUM_CONTROLLER_BUTTONS;
+               controller_button_i++)
+          {
+            cur_controller->buttons[controller_button_i].ended_down = \
+              prev_controller->buttons[controller_button_i].ended_down;
+          }
+        }
+        input_passed_to_hhf = false;
       }
 
     } 
