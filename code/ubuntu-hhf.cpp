@@ -57,7 +57,6 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
                          UdevPollDevice poll_devices[MAX_PROCESS_FDS],
                          HHFInput *input)
 {
-  // LOCAL_PERSIST int hotplug_device_cursor = 0;
   LOCAL_PERSIST int hhf_i = 0;
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
@@ -67,8 +66,8 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
 
   // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
-  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
-  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
+  //dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  //if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
 
   dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
@@ -88,13 +87,14 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
       UdevPollDevice *dev = &poll_devices[dev_fd];
       dev->type = dev_type;
-      // TODO(Ryan): Ensure these don't go over max number for that particular
-      // device in HHFInput
+
+      ASSERT(hhf_i < HHF_INPUT_MAX_NUM_CONTROLLERS);
+      input->controllers[hhf_i].is_connected = true;
       if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
       {
         input->controllers[hhf_i].is_analog = true;
-        dev->hhf_i = hhf_i++;
       }
+      dev->hhf_i = hhf_i++;
 
       //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
@@ -376,6 +376,29 @@ udev_process_digital_button(HHFInputButtonState *prev_button_state,
   }
 }
 
+INTERNAL void
+udev_process_analog_button(HHFInputButtonState *prev_button_state_neg,
+                           HHFInputButtonState *cur_button_state_neg,
+                           HHFInputButtonState *prev_button_state_pos,
+                           HHFInputButtonState *cur_button_state_pos,
+                           int value)
+{
+  if (value < 0)
+  {
+    udev_process_digital_button(prev_button_state_neg, cur_button_state_neg, true);
+  }
+  else if (value > 0) 
+  {
+    udev_process_digital_button(prev_button_state_pos, cur_button_state_pos, true);
+  }
+  else
+  {
+    udev_process_digital_button(prev_button_state_neg, cur_button_state_neg, false);
+    udev_process_digital_button(prev_button_state_pos, cur_button_state_pos, false);
+  }
+}
+
+
 //INTERVAL void
 //udev_check_hotplug_devices(struct udev_monitor *monitor,
 //                           UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
@@ -457,36 +480,48 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       // TODO(Ryan): Cannot vibrate
       if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
       {
-        // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
         if (dev_event_code == BTN_DPAD_LEFT)
         {
           udev_process_digital_button(&prev_controller_state->left, 
                                       &cur_controller_state->left, is_down);
         }
-        bool right = (dev_event_code == BTN_DPAD_RIGHT);
-        bool left = (dev_event_code == BTN_DPAD_LEFT);
-        bool down = (dev_event_code == BTN_DPAD_DOWN);
-
+        if (dev_event_code == BTN_DPAD_RIGHT)
+        {
+          udev_process_digital_button(&prev_controller_state->right, 
+                                      &cur_controller_state->right, is_down);
+        }
+        if (dev_event_code == BTN_DPAD_UP)
+        {
+          udev_process_digital_button(&prev_controller_state->up, 
+                                      &cur_controller_state->up, is_down);
+        }
+        if (dev_event_code == BTN_DPAD_DOWN)
+        {
+          udev_process_digital_button(&prev_controller_state->down, 
+                                      &cur_controller_state->down, is_down);
+        }
+        // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
         if (dev_event_code == ABS_HAT0X)
         {
-          if (dev_event_value < 0)
-          {
-            udev_process_digital_button(&prev_controller_state->left, 
-                                        &cur_controller_state->left, true);
-          }
-          else if (dev_event_value > 0) 
-          {
-            udev_process_digital_button(&prev_controller_state->right, 
-                                        &cur_controller_state->right, true);
-          }
-          else
-          {
-            udev_process_digital_button(&prev_controller_state->left, 
-                                        &cur_controller_state->left, false);
-            udev_process_digital_button(&prev_controller_state->right, 
-                                        &cur_controller_state->right, false);
-          }
+          udev_process_analog_button(&prev_controller_state->left, 
+                                     &cur_controller_state->left,
+                                     &prev_controller_state->right,
+                                     &cur_controller_state->right,
+                                     dev_event_value);
         }
+        if (dev_event_code == ABS_HAT0Y)
+        {
+          udev_process_analog_button(&prev_controller_state->down, 
+                                     &cur_controller_state->down,
+                                     &prev_controller_state->up,
+                                     &cur_controller_state->up,
+                                     dev_event_value);
+        }
+
+        // TODO(Ryan): evdev doesn't expose deadzone.
+        // Perhaps it is handled for us? (XInput deadzone is significant, e.g. 25% of range)
+        int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
+        int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
 
         bool select = (dev_event_code == BTN_SELECT);
         bool start = (dev_event_code == BTN_START);
@@ -498,8 +533,6 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
         bool south = (dev_event_code == BTN_SOUTH);
         bool west = (dev_event_code == BTN_WEST);
 
-        int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
-        int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
 
       }
 

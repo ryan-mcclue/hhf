@@ -16,11 +16,14 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedant
 
 # TODO(Ryan): For kernel, compile with oldest LTS?
 # Libc is forwards-compatible, compile with oldest libc determined with objdump. 
-# Although staticallyy linking with musl-libc possible, may cause issues for dependencies  
+# Although statically linking with musl-libc possible, may cause issues for dependencies  
+
+# TODO(Ryan): Separate into compiler and linker flags
 
 # Add thread-sanitizer later. Is address-sanitizer worth it?
 ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
   -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings'
+
 dev_flags="-O0 -g -ggdb -DHHF_SLOW -DHHF_INTERNAL
   -Wl,-Map=build/ubuntu-hhf.map $ignored_warnings"
 

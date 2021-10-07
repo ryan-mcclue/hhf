@@ -115,7 +115,7 @@ struct HHFInputButtonState
 #define HHF_INPUT_NUM_CONTROLLER_BUTTONS 6
 struct HHFInputController
 {
-  // TODO(Ryan): Insert timing values here
+  bool is_connected;
   bool is_analog;
 
   r32 min_x, min_y, max_x, max_y;
@@ -137,9 +137,10 @@ struct HHFInputController
   };
 };
 
-#define HHF_INPUT_MAX_NUM_CONTROLLERS 4
+#define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
+  // TODO(Ryan): Insert timing values here
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
