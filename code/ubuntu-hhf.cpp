@@ -1,69 +1,5 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 
-#include <cmath>
-#include <cstdio>
-#include <cstring> 
-#include <cerrno>
-#include <cstdlib>
-#include <cstdint>
-#include <cctype>
-#include <climits>
-#include <cinttypes>
-
-#define INTERNAL static
-#define GLOBAL static
-#define LOCAL_PERSIST static
-#define BILLION 1000000000L
-
-typedef unsigned int uint;
-
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
-typedef uint64_t u64;
-typedef int8_t s8;
-typedef int16_t s16;
-typedef int32_t s32;
-typedef int64_t s64;
-// NOTE(Ryan): This is to avoid compiler adjusting a value like 1234 to 1 which it
-//             would have to do if assigning to a bool.
-typedef u32 b32;
-typedef float r32;
-typedef double r64;
-
-#if defined(HHF_SLOW)
-INTERNAL void __bp(char const *msg)
-{ 
-  if (msg != NULL) printf("BP: %s\n", msg);
-  return; 
-}
-INTERNAL void __ebp(char const *msg)
-{ 
-  char *errno_msg = strerror(errno);
-  if (msg != NULL) printf("EBP: %s (%s)\n", msg, errno_msg); 
-  return;
-}
-#define BP(msg) __bp(msg)
-#define EBP(msg) __ebp(msg)
-#define ASSERT(cond) if (!(cond)) {BP("ASSERT");}
-#else
-#define BP(msg)
-#define EBP(msg)
-#define ASSERT(cond)
-#endif
-
-#define ARRAY_LEN(arr) \
-  (sizeof(arr)/sizeof(arr[0]))
-
-#define KILOBYTES(n) \
-  ((n) * 1024UL)
-#define MEGABYTES(n) \
-  ((n) * KILOBYTES(n))
-#define GIGABYTES(n) \
-  ((n) * MEGABYTES(n))
-#define TERABYTES(n) \
-  ((n) * GIGABYTES(n))
-
 #include "hhf.h"
 #include "hhf.cpp"
 
@@ -77,6 +13,7 @@ INTERNAL void __ebp(char const *msg)
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
@@ -125,20 +62,20 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
-  char const *dev_prop = \
-    udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
+  char *dev_prop = \
+    (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
 
   // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
-  dev_prop = udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
 
-  dev_prop = udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
 
   if (dev_type != UDEV_DEVICE_TYPE_IGNORE)
   {
-    const char *dev_path = udev_device_get_devnode(device);
+    char *dev_path = (char *)udev_device_get_devnode(device);
     if (dev_path != NULL)
     {
       int dev_fd = open(dev_path, O_RDWR | O_NONBLOCK);
@@ -187,7 +124,7 @@ udev_populate_devices(struct udev *udev_obj, int epoll_fd,
   struct udev_list_entry *udev_entry = NULL;
   udev_list_entry_foreach(udev_entry, udev_entries)
   {
-    char const *udev_entry_syspath = udev_list_entry_get_name(udev_entry);
+    char *udev_entry_syspath = (char *)udev_list_entry_get_name(udev_entry);
     struct udev_device *device = udev_device_new_from_syspath(udev_obj, 
                                                               udev_entry_syspath);
 
@@ -590,6 +527,122 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
   }
 }
 
+void
+hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result)
+{
+  free(file_result->contents);
+}
+
+// TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
+int
+hhf_platform_write_entire_file(char *file_name, size_t size, void *memory)
+{
+  int result = 0;
+
+  size_t bytes_to_write = 0;
+  u8 *byte_location = NULL;
+  int file_fd = 0;
+
+  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC); 
+  if (open_res < 0) 
+  {
+    EBP(NULL);
+    result = errno;
+    goto end;
+  }
+  file_fd = open_res;
+
+  bytes_to_write = size;
+  byte_location = (u8 *)memory;
+  while (bytes_to_write > 0) 
+  {
+    int write_res = write(file_fd, byte_location, bytes_to_write); 
+    if (write_res < 0) 
+    {
+      EBP(NULL);
+      result = errno;
+      goto end_open;
+    }
+    else
+    {
+      int bytes_written = write_res;
+      bytes_to_write -= bytes_written;
+      byte_location += bytes_written;
+    }
+  }
+  // IMPORTANT(Ryan): Allow other programs to use the files created inside the debugger
+  fchmod(file_fd, S_IROTH | S_IWOTH);
+end_open:
+  close(file_fd); 
+end:
+  return result;
+}
+
+// TODO(Ryan): Remove dynamic memory allocation here and obtain from memory pool
+// Avoid round tripping by writing to a queue
+// Introduce streaming, i.e background loading
+HHFPlatformReadFileResult
+hhf_platform_read_entire_file(char *file_name)
+{
+  HHFPlatformReadFileResult result = {0};
+
+  // IMPORTANT(Ryan): Require forward declarations to avoid g++ error of jumping over init
+  size_t bytes_to_read = 0;
+  u8 *byte_location = NULL;
+  int file_fd = 0, fstat_res = 0;
+  struct stat file_status = {0};
+
+  int open_res = open(file_name, O_RDONLY); 
+  if (open_res < 0) 
+  {
+    EBP(NULL);
+    result.errno_code = errno; 
+    goto end;
+  }
+  file_fd = open_res;
+
+  fstat_res = fstat(file_fd, &file_status);
+  if (fstat_res < 0) 
+  {
+    EBP(NULL);
+    result.errno_code = errno; 
+    goto end_open;
+  }
+
+  result.contents = malloc(file_status.st_size);
+  if (result.contents == NULL)
+  {
+    EBP(NULL);
+    result.errno_code = errno;
+    goto end_open;
+  }
+  result.size = file_status.st_size;
+
+  bytes_to_read = file_status.st_size;
+  byte_location = (u8 *)result.contents;
+  while (bytes_to_read > 0) 
+  {
+    int read_res = read(file_fd, byte_location, bytes_to_read); 
+    if (read_res < 0) 
+    {
+      EBP(NULL);
+      result.errno_code = errno;
+      free(result.contents);
+      goto end_open;
+    }
+    else
+    {
+      int bytes_read = read_res;
+      bytes_to_read -= bytes_read;
+      byte_location += bytes_read;
+    }
+  }
+end_open:
+  close(file_fd); 
+end:
+  return result;
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -692,7 +745,8 @@ main(int argc, char *argv[])
 
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
-  s16 pulse_buffer[pulse_buffer_num_samples] = {};
+  s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
+  if (pulse_buffer == NULL) EBP(NULL);
 
   HHFSoundBuffer hhf_sound_buffer = {};
   hhf_sound_buffer.samples_per_second = pulse_samples_per_second;
@@ -779,6 +833,7 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
+            // TODO(Ryan): Swap again outside this loop to handle polling for transition counts
             hhf_prev_input = hhf_cur_input;
             hhf_cur_input = {};
             for (int controller_i = 0; 

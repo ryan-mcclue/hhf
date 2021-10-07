@@ -6,10 +6,25 @@ test ! -d build && mkdir build
 intel_vtune="$HOME/intel/oneapi/vtune/2021.6.0/sdk"
 intel_vtune_flags="-I ${intel_vtune}/include -L ${intel_vtune}/lib64"
 
-common_flags='-fno-exceptions -fno-rtti -std=c++2a'
-# IMPORTANT(Ryan): We disable preprocessor warnings to suppress RLIMIT_NOFILE redefinition
-# when including <sys/resource.h>
-dev_flags="-g -Wall -DHHF_SLOW -DHHF_INTERNAL -Wno-unused-variable -Wp,-w"
+common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedantic 
+  -Warray-bounds=2 -march=native'
+
+# TODO(Ryan): Build for arm and test with qemu? 
+
+# TODO(Ryan): Use virt-manager for other distributions
+# TODO(Ryan): For kernel, compile with oldest LTS?
+# Libc is forwards-compatible, compile with oldest libc determined with objdump. 
+# Although staticallyy linking with musl-libc possible, may cause issues for dependencies  
+
+# Add thread-sanitizer later. Is address-sanitizer worth it?
+ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
+  -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings'
+dev_flags="-O0 -g -ggdb -DHHF_SLOW -DHHF_INTERNAL
+  -Wl,-Map=build/ubuntu-hhf.map $ignored_warnings"
+
+#"-ffunction-sections -fdata-sections"
+# linker_dev_flags="--gc-sections"
+
 # IMPORTANT(Ryan): gcc extension to allow VLA.
 # Without, have to use alloca()
 

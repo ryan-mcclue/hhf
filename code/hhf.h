@@ -1,6 +1,95 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 #pragma once
 
+#include <cmath>
+#include <cstdio>
+#include <cstring> 
+#include <cerrno>
+#include <cstdlib>
+#include <cstdint>
+#include <cctype>
+#include <climits>
+#include <cinttypes>
+
+#define INTERNAL static
+#define GLOBAL static
+#define LOCAL_PERSIST static
+#define BILLION 1000000000L
+
+typedef unsigned int uint;
+
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
+typedef int8_t s8;
+typedef int16_t s16;
+typedef int32_t s32;
+typedef int64_t s64;
+// NOTE(Ryan): This is to avoid compiler adjusting a value like 1234 to 1 which it
+//             would have to do if assigning to a bool.
+typedef u32 b32;
+typedef float r32;
+typedef double r64;
+
+#if defined(HHF_SLOW)
+INTERNAL void __bp(char const *msg)
+{ 
+  if (msg != NULL) printf("BP: %s\n", msg);
+  return; 
+}
+INTERNAL void __ebp(char const *msg)
+{ 
+  char *errno_msg = strerror(errno);
+  if (msg != NULL) printf("EBP: %s (%s)\n", msg, errno_msg); 
+  return;
+}
+#define BP(msg) __bp(msg)
+#define EBP(msg) __ebp(msg)
+#define ASSERT(cond) if (!(cond)) {BP("ASSERT");}
+#else
+#define BP(msg)
+#define EBP(msg)
+#define ASSERT(cond)
+#endif
+
+#define ARRAY_LEN(arr) \
+  (sizeof(arr)/sizeof(arr[0]))
+
+#define KILOBYTES(n) \
+  ((n) * 1024UL)
+#define MEGABYTES(n) \
+  ((n) * KILOBYTES(n))
+#define GIGABYTES(n) \
+  ((n) * MEGABYTES(n))
+#define TERABYTES(n) \
+  ((n) * GIGABYTES(n))
+
+inline u32
+safe_truncate_u64(u64 val)
+{
+  ASSERT(val <= UINT32_MAX);
+  return (u32)val;
+}
+
+struct HHFPlatformReadFileResult
+{
+  void *contents;
+  size_t size;
+  int errno_code;
+};
+
+#if defined(HHF_INTERNAL)
+void
+hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result);
+
+HHFPlatformReadFileResult
+hhf_platform_read_entire_file(char const *file_name);
+
+int
+hhf_platform_write_entire_file(char const *file_name, size_t size, void *memory);
+#endif
+
 struct HHFBackBuffer
 {
   // NOTE(Ryan): Memory order: XX RR GG BB
@@ -35,7 +124,8 @@ struct HHFInputController
   union
   {
     HHFInputButtonState buttons[HHF_INPUT_NUM_CONTROLLER_BUTTONS];
-    struct
+    // IMPORTANT(Ryan): Ignore -Wpedantic to allow anonymous structs
+    __extension__ struct
     {
       HHFInputButtonState up;
       HHFInputButtonState down;
