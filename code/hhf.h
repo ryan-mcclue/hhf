@@ -124,7 +124,8 @@ struct HHFInputController
   union
   {
     HHFInputButtonState buttons[HHF_INPUT_NUM_CONTROLLER_BUTTONS];
-    struct
+    // IMPORTANT(Ryan): Ignore -Wpedantic to allow anonymous structs
+    __extension__ struct
     {
       HHFInputButtonState up;
       HHFInputButtonState down;

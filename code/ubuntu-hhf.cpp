@@ -62,20 +62,20 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
-  char const *dev_prop = \
-    udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
+  char *dev_prop = \
+    (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
 
   // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
-  dev_prop = udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
 
-  dev_prop = udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
 
   if (dev_type != UDEV_DEVICE_TYPE_IGNORE)
   {
-    const char *dev_path = udev_device_get_devnode(device);
+    char *dev_path = (char *)udev_device_get_devnode(device);
     if (dev_path != NULL)
     {
       int dev_fd = open(dev_path, O_RDWR | O_NONBLOCK);
@@ -124,7 +124,7 @@ udev_populate_devices(struct udev *udev_obj, int epoll_fd,
   struct udev_list_entry *udev_entry = NULL;
   udev_list_entry_foreach(udev_entry, udev_entries)
   {
-    char const *udev_entry_syspath = udev_list_entry_get_name(udev_entry);
+    char *udev_entry_syspath = (char *)udev_list_entry_get_name(udev_entry);
     struct udev_device *device = udev_device_new_from_syspath(udev_obj, 
                                                               udev_entry_syspath);
 
@@ -535,7 +535,7 @@ hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result)
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(char const *file_name, size_t size, void *memory)
+hhf_platform_write_entire_file(char *file_name, size_t size, void *memory)
 {
   int result = 0;
 
@@ -582,7 +582,7 @@ end:
 // Avoid round tripping by writing to a queue
 // Introduce streaming, i.e background loading
 HHFPlatformReadFileResult
-hhf_platform_read_entire_file(char const *file_name)
+hhf_platform_read_entire_file(char *file_name)
 {
   HHFPlatformReadFileResult result = {0};
 
@@ -745,7 +745,8 @@ main(int argc, char *argv[])
 
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
-  s16 pulse_buffer[pulse_buffer_num_samples] = {};
+  s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
+  if (pulse_buffer == NULL) EBP(NULL);
 
   HHFSoundBuffer hhf_sound_buffer = {};
   hhf_sound_buffer.samples_per_second = pulse_samples_per_second;
@@ -832,6 +833,7 @@ main(int argc, char *argv[])
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
 
+            // TODO(Ryan): Swap again outside this loop to handle polling for transition counts
             hhf_prev_input = hhf_cur_input;
             hhf_cur_input = {};
             for (int controller_i = 0; 
