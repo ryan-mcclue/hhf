@@ -520,8 +520,13 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
 
         // TODO(Ryan): evdev doesn't expose deadzone.
         // Perhaps it is handled for us? (XInput deadzone is significant, e.g. 25% of range)
-        int stick_x = (dev_event_code == ABS_X ? dev_event_value : 0);
-        int stick_y = (dev_event_code == ABS_Y ? dev_event_value : 0);
+
+        // we want to trigger move_up if the stick_x is set so we get option of using
+        // analog or digital
+        r32 threshold = 0.5f;
+        // if (stick_x < -threshold) move_left
+        int stick_x = (dev_event_code == ABS_X ? dev_event_value / SHRT_MAX : 0);
+        int stick_y = (dev_event_code == ABS_Y ? dev_event_value / SHRT_MAX : 0);
 
         bool select = (dev_event_code == BTN_SELECT);
         bool start = (dev_event_code == BTN_START);

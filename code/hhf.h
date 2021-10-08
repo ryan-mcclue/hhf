@@ -46,6 +46,7 @@ INTERNAL void __ebp(char const *msg)
 }
 #define BP(msg) __bp(msg)
 #define EBP(msg) __ebp(msg)
+// NOTE(Ryan): Could use this to catch out of bounds array 
 #define ASSERT(cond) if (!(cond)) {BP("ASSERT");}
 #else
 #define BP(msg)
