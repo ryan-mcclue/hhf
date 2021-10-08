@@ -56,12 +56,23 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
     memory->is_initialized = true;
   }
 
-  HHFInputController controller = input->controllers[0];
-  if (controller.is_analog)
+  // counting how many half transition counts over say half a second gives us
+  // whether the user 'dashed'
+  for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; ++controller_i)
   {
-    if (controller.left.ended_down)
+    HHFInputController controller = input->controllers[controller_i];
+    if (controller.is_connected)
     {
-      state->x_offset += 2;
+      // digital tuning
+      if (controller.move_left.ended_down) state->x_offset -= 2;
+      if (controller.move_right.ended_down) state->x_offset += 2;
+      if (controller.move_up.ended_down) state->y_offset -= 2;
+      if (controller.move_down.ended_down) state->y_offset += 2;
+
+      // analog override
+      if (controller.is_analog)
+      {
+      }
     }
   }
 
@@ -69,3 +80,4 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
 
   output_sound(sound_buffer);
 }
+

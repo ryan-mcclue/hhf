@@ -46,6 +46,7 @@ INTERNAL void __ebp(char const *msg)
 }
 #define BP(msg) __bp(msg)
 #define EBP(msg) __ebp(msg)
+// NOTE(Ryan): Could use this to catch out of bounds array 
 #define ASSERT(cond) if (!(cond)) {BP("ASSERT");}
 #else
 #define BP(msg)
@@ -112,14 +113,13 @@ struct HHFInputButtonState
   bool ended_down;
 };
 
-#define HHF_INPUT_NUM_CONTROLLER_BUTTONS 6
+#define HHF_INPUT_NUM_CONTROLLER_BUTTONS 12
 struct HHFInputController
 {
-  // TODO(Ryan): Insert timing values here
+  bool is_connected;
   bool is_analog;
 
-  r32 min_x, min_y, max_x, max_y;
-  r32 start_x, start_y, end_x, end_y;
+  r32 average_stick_x, average_stick_y;
 
   union
   {
@@ -127,19 +127,33 @@ struct HHFInputController
     // IMPORTANT(Ryan): Ignore -Wpedantic to allow anonymous structs
     __extension__ struct
     {
-      HHFInputButtonState up;
-      HHFInputButtonState down;
-      HHFInputButtonState left;
-      HHFInputButtonState right;
+      HHFInputButtonState move_up;
+      HHFInputButtonState move_down;
+      HHFInputButtonState move_left;
+      HHFInputButtonState move_right;
+
+      HHFInputButtonState action_up;
+      HHFInputButtonState action_down;
+      HHFInputButtonState action_left;
+      HHFInputButtonState action_right;
+
       HHFInputButtonState left_shoulder;
       HHFInputButtonState right_shoulder;
+
+      HHFInputButtonState back;
+      HHFInputButtonState start;
+
+      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      // IMPORTANT(Ryan): Add all buttons above here
+      HHFInputButtonState __TERMINATOR__;
     };
   };
 };
 
-#define HHF_INPUT_MAX_NUM_CONTROLLERS 4
+#define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
+  // TODO(Ryan): Insert timing values here
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
