@@ -52,6 +52,8 @@ struct UdevPollDevice
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
+GLOBAL bool want_to_run = true;
+
 INTERNAL void
 udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
                          UdevPollDevice poll_devices[MAX_PROCESS_FDS],
@@ -106,6 +108,8 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
   udev_device_unref(device);
 }
 
+// TODO(Ryan): Replace with raw evdev. Limiting solely using udev as "input" is presumabley only HID
+// Udev only of use with hotplugging.
 INTERNAL void
 udev_populate_devices(struct udev *udev_obj, int epoll_fd, 
                       UdevPollDevice poll_devices[MAX_PROCESS_FDS],
@@ -462,106 +466,121 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
     int num_dev_events = dev_event_bytes_read / sizeof(dev_events[0]); 
     for (int dev_event_i = 0; dev_event_i < num_dev_events; ++dev_event_i)
     {
-      int dev_event_type = dev_events[dev_event_i].type;
-      int dev_event_code = dev_events[dev_event_i].code;
-      int dev_event_value = dev_events[dev_event_i].value;
+      u16 dev_event_type = dev_events[dev_event_i].type;
+      u16 dev_event_code = dev_events[dev_event_i].code;
+      s32 dev_event_value = dev_events[dev_event_i].value;
 
-      printf("type: %d, code: %d, value: %d\n", dev_event_type, dev_event_code, dev_event_value);
+      // printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
       
       if (dev_event_type == EV_SYN) continue;
 
       bool was_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
-      bool is_down = (dev_event_type == EV_ABS ? dev_event_value == 1 : false);
+      bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
 
       HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
       HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
-      // TODO(Ryan): Cannot vibrate
-      if (dev.type == UDEV_DEVICE_TYPE_GAMEPAD)
+      // TODO(Ryan): Gamepad cannot vibrate
+      // TODO(Ryan): Multiple keyboards results in lag
+      if (dev_event_code == BTN_DPAD_LEFT || dev_event_code == KEY_A)
       {
-        if (dev_event_code == BTN_DPAD_LEFT)
-        {
-          udev_process_digital_button(&prev_controller_state->left, 
-                                      &cur_controller_state->left, is_down);
-        }
-        if (dev_event_code == BTN_DPAD_RIGHT)
-        {
-          udev_process_digital_button(&prev_controller_state->right, 
-                                      &cur_controller_state->right, is_down);
-        }
-        if (dev_event_code == BTN_DPAD_UP)
-        {
-          udev_process_digital_button(&prev_controller_state->up, 
-                                      &cur_controller_state->up, is_down);
-        }
-        if (dev_event_code == BTN_DPAD_DOWN)
-        {
-          udev_process_digital_button(&prev_controller_state->down, 
-                                      &cur_controller_state->down, is_down);
-        }
-        // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
-        if (dev_event_code == ABS_HAT0X)
-        {
-          udev_process_analog_button(&prev_controller_state->left, 
-                                     &cur_controller_state->left,
-                                     &prev_controller_state->right,
-                                     &cur_controller_state->right,
-                                     dev_event_value);
-        }
-        if (dev_event_code == ABS_HAT0Y)
-        {
-          udev_process_analog_button(&prev_controller_state->down, 
-                                     &cur_controller_state->down,
-                                     &prev_controller_state->up,
-                                     &cur_controller_state->up,
-                                     dev_event_value);
-        }
-
-        // TODO(Ryan): evdev doesn't expose deadzone.
-        // Perhaps it is handled for us? (XInput deadzone is significant, e.g. 25% of range)
-
-        // we want to trigger move_up if the stick_x is set so we get option of using
-        // analog or digital
-        r32 threshold = 0.5f;
-        // if (stick_x < -threshold) move_left
-        int stick_x = (dev_event_code == ABS_X ? dev_event_value / SHRT_MAX : 0);
-        int stick_y = (dev_event_code == ABS_Y ? dev_event_value / SHRT_MAX : 0);
-
-        bool select = (dev_event_code == BTN_SELECT);
-        bool start = (dev_event_code == BTN_START);
-        bool home = (dev_event_code == BTN_MODE);
-        bool left_shoulder = (dev_event_code == BTN_TL);
-        bool right_shoulder = (dev_event_code == BTN_TR);
-        bool north = (dev_event_code == BTN_NORTH);
-        bool east = (dev_event_code == BTN_EAST);
-        bool south = (dev_event_code == BTN_SOUTH);
-        bool west = (dev_event_code == BTN_WEST);
-
-
+        udev_process_digital_button(&prev_controller_state->move_left, 
+                                    &cur_controller_state->move_left, is_down);
+      }
+      if (dev_event_code == BTN_DPAD_RIGHT || dev_event_code == KEY_D)
+      {
+        udev_process_digital_button(&prev_controller_state->move_right, 
+                                    &cur_controller_state->move_right, is_down);
+      }
+      if (dev_event_code == BTN_DPAD_UP || dev_event_code == KEY_W)
+      {
+        udev_process_digital_button(&prev_controller_state->move_up, 
+                                    &cur_controller_state->move_up, is_down);
+      }
+      if (dev_event_code == BTN_DPAD_DOWN || dev_event_code == KEY_S)
+      {
+        udev_process_digital_button(&prev_controller_state->move_down, 
+                                    &cur_controller_state->move_down, is_down);
+      }
+      // IMPORTANT(Ryan): For some reason, dpad can be analog/digital or both.
+      if (dev_event_code == ABS_HAT0X)
+      {
+        udev_process_analog_button(&prev_controller_state->move_left, 
+                                   &cur_controller_state->move_left,
+                                   &prev_controller_state->move_right,
+                                   &cur_controller_state->move_right,
+                                   dev_event_value);
+      }
+      if (dev_event_code == ABS_HAT0Y)
+      {
+        udev_process_analog_button(&prev_controller_state->move_up, 
+                                   &cur_controller_state->move_up,
+                                   &prev_controller_state->move_down,
+                                   &cur_controller_state->move_down,
+                                   dev_event_value);
       }
 
-      // TODO(Ryan): hitting keys on different keyboards results in lag
-      if (dev.type == UDEV_DEVICE_TYPE_KEYBOARD)
+      // TODO(Ryan): evdev doesn't expose deadzone.
+      // Perhaps it is handled for us? (XInput deadzone is significant, e.g. 25% of range)
+      // If we were to handle, we would assume a rectangular deadzone (as oppose to circular)
+      if (dev_event_code == ABS_X)
       {
-        if (dev_event_code == KEY_A)
-        {
-          udev_process_digital_button(&prev_controller_state->left, 
-                                      &cur_controller_state->left, is_down);
-        }
-        bool w = (dev_event_code == KEY_W);
-        bool s = (dev_event_code == KEY_S);
-        bool d = (dev_event_code == KEY_D);
-        bool q = (dev_event_code == KEY_Q);
-        bool e = (dev_event_code == KEY_E);
-        bool up = (dev_event_code == KEY_UP);
-        bool down = (dev_event_code == KEY_DOWN);
-        bool right = (dev_event_code == KEY_RIGHT);
-        bool escape = (dev_event_code == KEY_ESC);
-        bool space = (dev_event_code == KEY_SPACE);
-        bool enter = (dev_event_code == KEY_ENTER);
-        bool ctrl = (dev_event_code == KEY_LEFTCTRL);
+        cur_controller_state->average_stick_x = (dev_event_value >= 0 ? 
+                                                ((r32)dev_event_value / INT32_MAX) : 
+                                                ((r32)dev_event_value / INT32_MIN));
       }
+      if (dev_event_code == ABS_Y)
+      {
+        cur_controller_state->average_stick_y = (dev_event_value >= 0 ? 
+                                                ((r32)dev_event_value / INT32_MAX) : 
+                                                ((r32)dev_event_value / INT32_MIN));
+      }
+
+      if (dev_event_code == BTN_TL || dev_event_code == KEY_Q)
+      {
+        udev_process_digital_button(&prev_controller_state->left_shoulder,
+                                    &cur_controller_state->left_shoulder, is_down);
+      }
+      if (dev_event_code == BTN_TR || dev_event_code == KEY_E)
+      {
+        udev_process_digital_button(&prev_controller_state->right_shoulder,
+                                    &cur_controller_state->right_shoulder, is_down);
+      }
+
+      if (dev_event_code == BTN_NORTH || dev_event_code == KEY_UP)
+      {
+        udev_process_digital_button(&prev_controller_state->action_up,
+                                    &cur_controller_state->action_up, is_down);
+      }
+      if (dev_event_code == BTN_SOUTH || dev_event_code == KEY_DOWN)
+      {
+        udev_process_digital_button(&prev_controller_state->action_down,
+                                    &cur_controller_state->action_down, is_down);
+      }
+      if (dev_event_code == BTN_EAST || dev_event_code == KEY_RIGHT)
+      {
+        udev_process_digital_button(&prev_controller_state->action_right,
+                                    &cur_controller_state->action_right, is_down);
+      }
+      if (dev_event_code == BTN_WEST || dev_event_code == KEY_LEFT)
+      {
+        udev_process_digital_button(&prev_controller_state->action_left,
+                                    &cur_controller_state->action_left, is_down);
+      }
+      if (dev_event_code == BTN_SELECT || dev_event_code == KEY_SPACE)
+      {
+        udev_process_digital_button(&prev_controller_state->back,
+                                    &cur_controller_state->back, is_down);
+      }
+      if (dev_event_code == BTN_START || dev_event_code == KEY_ESC)
+      {
+        udev_process_digital_button(&prev_controller_state->start,
+                                    &cur_controller_state->start, is_down);
+      }
+#if defined(HHF_INTERNAL)
+      if (dev_event_code == KEY_F12) want_to_run = false;
+#endif
     }
   }
 }
@@ -747,6 +766,10 @@ main(int argc, char *argv[])
   hhf_back_buffer.memory = xlib_back_buffer.memory;
 
   HHFInput hhf_cur_input = {}, hhf_prev_input = {};
+  bool hhf_input_controller_buttons_bounds_check = \
+    &hhf_cur_input.controllers[0].__TERMINATOR__ - &hhf_cur_input.controllers[0].buttons[0] == 
+      ARRAY_LEN(hhf_cur_input.controllers[0].buttons);
+  ASSERT(hhf_input_controller_buttons_bounds_check);
 
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
@@ -821,7 +844,7 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
-  bool want_to_run = true, input_passed_to_hhf = false;
+  bool input_passed_to_hhf = false;
   int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
@@ -894,6 +917,7 @@ main(int argc, char *argv[])
           HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];
           HHFInputController *prev_controller = &hhf_prev_input.controllers[controller_i];
           cur_controller->is_analog = prev_controller->is_analog;
+          cur_controller->is_connected = prev_controller->is_connected;
           for (int controller_button_i = 0; 
                controller_button_i < HHF_INPUT_NUM_CONTROLLER_BUTTONS;
                controller_button_i++)

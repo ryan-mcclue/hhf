@@ -113,14 +113,13 @@ struct HHFInputButtonState
   bool ended_down;
 };
 
-#define HHF_INPUT_NUM_CONTROLLER_BUTTONS 6
+#define HHF_INPUT_NUM_CONTROLLER_BUTTONS 12
 struct HHFInputController
 {
   bool is_connected;
   bool is_analog;
 
-  r32 min_x, min_y, max_x, max_y;
-  r32 start_x, start_y, end_x, end_y;
+  r32 average_stick_x, average_stick_y;
 
   union
   {
@@ -128,12 +127,25 @@ struct HHFInputController
     // IMPORTANT(Ryan): Ignore -Wpedantic to allow anonymous structs
     __extension__ struct
     {
-      HHFInputButtonState up;
-      HHFInputButtonState down;
-      HHFInputButtonState left;
-      HHFInputButtonState right;
+      HHFInputButtonState move_up;
+      HHFInputButtonState move_down;
+      HHFInputButtonState move_left;
+      HHFInputButtonState move_right;
+
+      HHFInputButtonState action_up;
+      HHFInputButtonState action_down;
+      HHFInputButtonState action_left;
+      HHFInputButtonState action_right;
+
       HHFInputButtonState left_shoulder;
       HHFInputButtonState right_shoulder;
+
+      HHFInputButtonState back;
+      HHFInputButtonState start;
+
+      // ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+      // IMPORTANT(Ryan): Add all buttons above here
+      HHFInputButtonState __TERMINATOR__;
     };
   };
 };
