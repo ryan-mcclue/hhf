@@ -9,7 +9,6 @@
 
 #include <sys/mman.h>
 #include <sys/ioctl.h>
-#include <sys/resource.h>
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/types.h>
@@ -805,6 +804,12 @@ main(int argc, char *argv[])
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
+  // pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code);
+  // if (latency == (pa_usec_t)-1) BP(pa_strerror(pulse_error_code));
+  // printf("latency: %0.0fusec\n", (r32)latency);
+
+  // TODO(Ryan): This assumes hitting frame rate exactly.
+  // Will need to change to improve synchronisation
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
@@ -889,6 +894,21 @@ main(int argc, char *argv[])
 
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
+
+
+
+            /*#if defined(HHF_INTERNAL)
+            {
+              int pad_x = 16, pad_y = 16;
+              int x0 = pad_x, x1 = width - pad_x;
+              int pos[30] = {}; // store 30 most recent
+              if (index > 30) index = 0;
+              debug_display_buffer()
+              {
+                // Assume length of buffer is same as width of back buffer
+              }
+            }
+            #endif*/
 
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,

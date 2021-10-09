@@ -24,6 +24,8 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedant
 ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
   -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings'
 
+# TODO(Ryan): -O0 still removes unused variables?
+# -Og gives error on open() ...
 dev_flags="-O0 -g -ggdb -DHHF_SLOW -DHHF_INTERNAL
   -Wl,-Map=build/ubuntu-hhf.map $ignored_warnings"
 
