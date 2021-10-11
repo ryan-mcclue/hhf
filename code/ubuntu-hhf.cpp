@@ -48,6 +48,7 @@ struct UdevPollDevice
 #define EPOLL_UDEV_MAX_EVENTS 5
 #define MAX_UDEV_DEVICES 32
 
+// TODO(Ryan): Investigate using $(pasuspender -- ./build/ubuntu-hhf) to allow ALSA usage directly
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
@@ -469,10 +470,10 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       u16 dev_event_code = dev_events[dev_event_i].code;
       s32 dev_event_value = dev_events[dev_event_i].value;
 
-      if (dev_event_type == EV_KEY)
-      {
-        printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
-      }
+      //if (dev_event_type == EV_KEY)
+      //{
+      //  printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      //}
       
       if (dev_event_type == EV_SYN) continue;
 
@@ -797,22 +798,12 @@ main(int argc, char *argv[])
   pulse_spec.rate = pulse_samples_per_second;
   pulse_spec.channels = pulse_num_channels;
 
-  // TODO(Ryan):
-  // this incurs a 67Mib allocation.
-  // libpulse allocates an additional 200Mib.
-  // why!?
-  // frequency seems to change after a period of long time running
   pa_simple *pulse_player = pa_simple_new(NULL, "HHF", PA_STREAM_PLAYBACK, NULL, 
                                           "HHF Sound", &pulse_spec, NULL, NULL,
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
-  // pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code);
-  // if (latency == (pa_usec_t)-1) BP(pa_strerror(pulse_error_code));
-  // printf("latency: %0.0fusec\n", (r32)latency);
-
-  // TODO(Ryan): This assumes hitting frame rate exactly.
-  // Will need to change to improve synchronisation
+  // TODO(Ryan): Handle latency. It fluctuates, so ensure buffer big enough to handle large latency
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
@@ -895,11 +886,12 @@ main(int argc, char *argv[])
             hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
             input_passed_to_hhf = true;
 
-            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
+            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * pulse_buffer_num_samples, 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
 
-
-
+            pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code);
+            if (latency == (pa_usec_t)-1) BP(pa_strerror(pulse_error_code));
+            printf("latency: %0.0fmsec\n", (r32)latency / 1000.0f);
             /*#if defined(HHF_INTERNAL)
             {
               int pad_x = 16, pad_y = 16;
