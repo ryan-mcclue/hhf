@@ -64,10 +64,10 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
     if (controller.is_connected)
     {
       // digital tuning
-      if (controller.move_left.ended_down) state->x_offset -= 2;
-      if (controller.move_right.ended_down) state->x_offset += 2;
-      if (controller.move_up.ended_down) state->y_offset -= 2;
-      if (controller.move_down.ended_down) state->y_offset += 2;
+      if (controller.action_left.ended_down) state->x_offset -= 2;
+      if (controller.action_right.ended_down) state->x_offset += 2;
+      if (controller.action_up.ended_down) state->y_offset -= 2;
+      if (controller.action_down.ended_down) state->y_offset += 2;
 
       // analog override
       if (controller.is_analog)

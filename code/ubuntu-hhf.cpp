@@ -470,13 +470,17 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       u16 dev_event_code = dev_events[dev_event_i].code;
       s32 dev_event_value = dev_events[dev_event_i].value;
 
-      // printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      if (dev_event_type == EV_KEY)
+      {
+         printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      }
       
       if (dev_event_type == EV_SYN) continue;
 
       bool was_released = (dev_event_type == EV_KEY ? dev_event_value == 0 : false);
-      bool is_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
+      bool first_down = (dev_event_type == EV_KEY ? dev_event_value == 1 : false);
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
+      bool is_down = (first_down || was_down);
 
       HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
       HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
