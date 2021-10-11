@@ -469,7 +469,10 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       u16 dev_event_code = dev_events[dev_event_i].code;
       s32 dev_event_value = dev_events[dev_event_i].value;
 
-      // printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      if (dev_event_type == EV_KEY)
+      {
+        printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      }
       
       if (dev_event_type == EV_SYN) continue;
 
