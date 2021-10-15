@@ -18,6 +18,8 @@
 #include <unistd.h>
 #include <linux/input.h>
 
+#include <dlfcn.h>
+
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
@@ -704,6 +706,16 @@ end:
   return result;
 }
 
+INTERNAL void
+load_hhf_code(void)
+{
+  void (*hhf_update_and_render)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *) = NULL;
+  void *hhf_lib = dlopen("build/hhf.so", RTLD_NOW);
+  if (hhf_lib == NULL) EBP(NULL);
+  // dlsym(hhf_lib, "func_name");
+  // dlclose(hhf_lib);
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -798,27 +810,22 @@ main(int argc, char *argv[])
   pulse_spec.rate = pulse_samples_per_second;
   pulse_spec.channels = pulse_num_channels;
 
+  // IMPORTANT(Ryan): With integrated audio card, over 100ms of latency is expected 
   pa_simple *pulse_player = pa_simple_new(NULL, "HHF", PA_STREAM_PLAYBACK, NULL, 
                                           "HHF Sound", &pulse_spec, NULL, NULL,
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
-  // TODO(Ryan): Handle latency? 
-  // It fluctuates, so ensure buffer big enough to handle large latency
-  r32 fluctuate_dt = (frame_dt * 2.0f);
-
-  // this will get updated based on frame times
-  int pulse_num_base_samples_to_write = pulse_samples_per_second * frame_dt;
-
-  int pulse_buffer_num_base_samples = pulse_samples_per_second * fluctuate_dt; 
+  // TODO(Ryan): Handle audio skips when exceeding frame rate
+  int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
-  s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
+  s16 *pulse_buffer = (s16 *)calloc(pulse_buffer_num_samples, sizeof(s16));
   if (pulse_buffer == NULL) EBP(NULL);
 
   HHFSoundBuffer hhf_sound_buffer = {};
   hhf_sound_buffer.samples_per_second = pulse_samples_per_second;
   hhf_sound_buffer.samples = pulse_buffer;
-  hhf_sound_buffer.num_samples = pulse_num_base_samples_to_write; 
+  hhf_sound_buffer.num_samples = pulse_buffer_num_base_samples; 
 
   HHFMemory hhf_memory = {};
   // TODO(Ryan): Allocate based on information from sysinfo()
@@ -892,12 +899,9 @@ main(int argc, char *argv[])
             hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
             input_passed_to_hhf = true;
 
-            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_num_base_samples_to_write, 
+            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_buffer_num_base_samples, 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
 
-            //pa_usec_t latency = pa_simple_get_latency(pulse_player, &pulse_error_code);
-            //if (latency == (pa_usec_t)-1) BP(pa_strerror(pulse_error_code));
-            //printf("latency: %0.0fmsec\n", (r32)latency / 1000.0f);
             /*#if defined(HHF_INTERNAL)
             {
               int pad_x = 16, pad_y = 16;
@@ -924,9 +928,6 @@ main(int argc, char *argv[])
 
             prev_timespec = end_timespec;
             prev_cycle_count = end_cycle_count;
-
-            pulse_num_base_samples_to_write = pulse_samples_per_second * (ms_per_frame * 1000.0f);
-            hhf_sound_buffer.num_samples = pulse_num_base_samples_to_write;
           }
           XFreeEventData(xlib_display, cookie);
         }

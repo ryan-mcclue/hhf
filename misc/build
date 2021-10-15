@@ -36,8 +36,10 @@ dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL
 # IMPORTANT(Ryan): gcc extension to allow VLA.
 # Without, have to use alloca()
 
-libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse"
+libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
 
 g++ $common_flags $dev_flags \
   code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
   $libraries
+
+# g++ -g -fPIC code/hhf.cpp -shared -o build/hhf.so
