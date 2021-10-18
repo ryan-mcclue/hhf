@@ -878,6 +878,22 @@ main(int argc, char *argv[])
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
 
+  char hhf_location[128] = {};
+  readlink("/proc/self/exe", hhf_location, sizeof(hhf_location));
+  char *last_slash = NULL;
+  for (char *cursor = hhf_location; *cursor != '\0'; ++cursor)
+  {
+    if (*cursor == '/') last_slash = cursor;
+  }
+  char hhf_lib_loc[128] = {};
+  char hhf_temp_lib_loc[128] = {};
+  snprintf(hhf_lib_loc, sizeof(hhf_lib_loc), "%.*s/hhf.so", 
+           (int)(last_slash - hhf_location), hhf_location);
+  snprintf(hhf_temp_lib_loc, sizeof(hhf_lib_loc), "%.*s/hhf.temp-so", 
+           (int)(last_slash - hhf_location), hhf_location);
+
+  // IMPORTANT(Ryan): Signals utilised as it seems that the modification time of a file is
+  // changed before writing has completed. 
   signal(SIGUSR1, signal_reload_update_and_render);
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
@@ -929,9 +945,9 @@ main(int argc, char *argv[])
             if (want_to_reload_update_and_render)
             {
               if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
-              copy_file("build/hhf.so", "build/hhf-temp.so");
+              copy_file(hhf_lib_loc, hhf_temp_lib_loc);
               // TODO(Ryan): Understand how executables and shared objects exist in memory
-              update_and_render_lib = dlopen("build/hhf-temp.so", RTLD_NOW);
+              update_and_render_lib = dlopen(hhf_temp_lib_loc, RTLD_NOW);
               if (update_and_render_lib == NULL) EBP(NULL);
               update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
               if (update_and_render == NULL) EBP(dlerror());
