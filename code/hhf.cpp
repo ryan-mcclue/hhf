@@ -16,7 +16,7 @@ render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
     {
       u8 red = back_buffer_x + x_offset;
       u8 green = back_buffer_y + y_offset;
-      u8 blue = 0x55;
+      u8 blue = 0x33;
       *pixel++ = red << 16 | green << 8 | blue;
     }
   }

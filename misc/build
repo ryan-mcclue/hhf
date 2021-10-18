@@ -37,11 +37,13 @@ dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL $ignored_warnings"
 
 libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
 
-g++ $common_flags $dev_flags \
-  code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
-  $libraries
+# TODO(Ryan): Handle different threads
+ubuntu_hhf_pid=$(pgrep ubuntu-hhf)
+test -z "$ubuntu_hhf_pid" && g++ $common_flags $dev_flags \
+                           code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
+                           $libraries
 
 g++ $common_flags $dev_flags \
   -fPIC code/hhf.cpp -shared -o build/hhf.so
-
-# kill -SIGUSR1 $(pgrep ubuntu-hhf)
+# NOTE(Ryan): 10 == SIGUSR1
+test -n "$ubuntu_hhf_pid" && kill -10 $ubuntu_hhf_pid

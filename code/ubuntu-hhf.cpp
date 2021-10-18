@@ -727,10 +727,12 @@ copy_file(char *src_file, char *dst_file)
   close(dst_fd);
 }
 
-void
-load_update_and_render(int sig_num)
-{
+GLOBAL volatile bool want_to_reload_update_and_render = true;
 
+void
+signal_reload_update_and_render(int sig_num)
+{
+  want_to_reload_update_and_render = true;
 }
 
 typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
@@ -738,8 +740,6 @@ typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFIn
 int
 main(int argc, char *argv[])
 {
-  // signal(SIGUSR1, load_update_and_render);
- 
   Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL) BP(NULL);
 
@@ -878,16 +878,13 @@ main(int argc, char *argv[])
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
 
+  signal(SIGUSR1, signal_reload_update_and_render);
+  void *update_and_render_lib = NULL;
+  hhf_update_and_render_t update_and_render = NULL;
+
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
-
-  copy_file("build/file.txt", "build/file-copy.txt");
-
-  long update_and_render_cur_mod_time = 0;
-  void *update_and_render_lib = NULL;
-  hhf_update_and_render_t update_and_render = NULL;
-  uint update_and_render_frame_counter = 180; 
 
   bool input_passed_to_hhf = false;
   int x_offset = 0, y_offset = 0;
@@ -929,13 +926,7 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            // SIGUSR1
-            
-            struct stat update_and_render_stat = {};
-            if (stat("build/hhf.so", &update_and_render_stat) == -1) EBP(NULL);
-            long update_and_render_mod_time = update_and_render_stat.st_mtim.tv_nsec;
-
-            if (update_and_render_mod_time != update_and_render_cur_mod_time)
+            if (want_to_reload_update_and_render)
             {
               if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
               copy_file("build/hhf.so", "build/hhf-temp.so");
@@ -944,7 +935,7 @@ main(int argc, char *argv[])
               if (update_and_render_lib == NULL) EBP(NULL);
               update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
               if (update_and_render == NULL) EBP(dlerror());
-              update_and_render_cur_mod_time = update_and_render_mod_time;
+              want_to_reload_update_and_render = false;
             }
 
             update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
