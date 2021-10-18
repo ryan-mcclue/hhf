@@ -40,10 +40,15 @@ output_sound(HHFSoundBuffer *sound_buffer)
     *samples++ = val;
 
     tone_t += ((2.0f * M_PI) / (r32)tone_period);
+    // IMPORTANT(Ryan): This is to prevent pitch changing as we lose precision
+    if (tone_t > 2.0f * M_PI)
+    {
+      tone_t -= 2.0f * M_PI;
+    }
   }
 }
 
-void
+extern "C" void
 hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory)
 {
   ASSERT(sizeof(HHFState) <= memory->permanent_size);

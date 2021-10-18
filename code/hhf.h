@@ -73,23 +73,6 @@ safe_truncate_u64(u64 val)
   return (u32)val;
 }
 
-struct HHFPlatformReadFileResult
-{
-  void *contents;
-  size_t size;
-  int errno_code;
-};
-
-#if defined(HHF_INTERNAL)
-void
-hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result);
-
-HHFPlatformReadFileResult
-hhf_platform_read_entire_file(char const *file_name);
-
-int
-hhf_platform_write_entire_file(char const *file_name, size_t size, void *memory);
-#endif
 
 struct HHFBackBuffer
 {
@@ -168,9 +151,24 @@ struct HHFMemory
   u64 transient_size;
 };
 
+
+struct HHFPlatformReadFileResult
+{
+  void *contents;
+  size_t size;
+  int errno_code;
+};
+
+struct HHFPlatform
+{
+  HHFPlatformReadFileResult (*read_entire_file)(char *file_name);
+  void (*free_read_file_result)(HHFPlatformReadFileResult *read_result);
+  int (*write_entire_file)(char *filename, void *memory, size_t size);
+};
+
 void
 hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer,
-                      HHFInput *input, HHFMemory *memory);
+                      HHFInput *input, HHFMemory *memory, HHFPlatform *platform);
 
 // TODO(Ryan): The platform layer does not need to know about this
 struct HHFState

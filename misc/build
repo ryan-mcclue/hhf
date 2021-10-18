@@ -24,8 +24,10 @@ common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedant
 ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
   -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings'
 
-dev_flags="-O0 -g -ggdb -DHHF_SLOW -DHHF_INTERNAL
-  -Wl,-Map=build/ubuntu-hhf.map $ignored_warnings"
+# TODO(Ryan): -O0 still removes unused variables?
+# -Og gives error on open() ...
+dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL $ignored_warnings"
+# TODO(Ryan): memfault Usefulness of linker map files (analyse program size?)
 
 #"-ffunction-sections -fdata-sections"
 # linker_dev_flags="--gc-sections"
@@ -33,8 +35,15 @@ dev_flags="-O0 -g -ggdb -DHHF_SLOW -DHHF_INTERNAL
 # IMPORTANT(Ryan): gcc extension to allow VLA.
 # Without, have to use alloca()
 
-libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse"
+libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
+
+# TODO(Ryan): Handle different threads
+ubuntu_hhf_pid=$(pgrep ubuntu-hhf)
+test -z "$ubuntu_hhf_pid" && g++ $common_flags $dev_flags \
+                           code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
+                           $libraries
 
 g++ $common_flags $dev_flags \
-  code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
-  $libraries
+  -fPIC code/hhf.cpp -shared -o build/hhf.so
+# NOTE(Ryan): 10 == SIGUSR1
+test -n "$ubuntu_hhf_pid" && kill -10 $ubuntu_hhf_pid

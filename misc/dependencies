@@ -24,3 +24,10 @@ fi
 sudo sh -c 'echo kernel.perf_event_paranoid=0 >> /etc/sysctl.d/local.conf'
 sudo sh -c 'echo kernel.yama.ptrace_scope=0 >> /etc/sysctl.d/local.conf'
 sudo sh -c 'echo kernel.kptr_restrict=0 >> /etc/sysctl.d/local.conf'
+
+# NOTE(Ryan): This won't really have an affect it seems 
+# sudo sed -i 's/load-module module-udev-detect/load-module module-udev-detect tsched=0/g' /etc/pulse/default.pa
+# /etc/pulse/daemon.conf
+# default-fragments = 4
+# default-fragment-size-msec = 25
+# systemctl --user restart pulseaudio.service

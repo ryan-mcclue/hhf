@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 
 #include "hhf.h"
-#include "hhf.cpp"
 
 // platform specific last as OS may #define crazy things that override us
 
@@ -9,15 +8,18 @@
 
 #include <sys/mman.h>
 #include <sys/ioctl.h>
-#include <sys/resource.h>
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/types.h>
+#include <sys/sendfile.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
 #include <unistd.h>
 #include <linux/input.h>
+
+#include <dlfcn.h>
 
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
@@ -49,6 +51,7 @@ struct UdevPollDevice
 #define EPOLL_UDEV_MAX_EVENTS 5
 #define MAX_UDEV_DEVICES 32
 
+// TODO(Ryan): Investigate using $(pasuspender -- ./build/ubuntu-hhf) to allow ALSA usage directly
 #include <pulse/simple.h>
 #include <pulse/error.h>
 
@@ -590,14 +593,14 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
 }
 
 void
-hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result)
+hhf_platform_free_read_file_result(HHFPlatformReadFileResult *file_result)
 {
   free(file_result->contents);
 }
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(char *file_name, size_t size, void *memory)
+hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
 {
   int result = 0;
 
@@ -705,6 +708,36 @@ end:
   return result;
 }
 
+void
+copy_file(char *src_file, char *dst_file)
+{
+  int src_fd = open(src_file, O_RDONLY);
+  if (src_fd == -1) EBP(NULL);
+
+  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC);
+  if (dst_fd == -1) EBP(NULL);
+  if (fchmod(dst_fd, 0777) == -1) EBP(NULL);
+
+  struct stat src_file_stat = {};
+  if (fstat(src_fd, &src_file_stat) == -1) EBP(NULL);
+  int src_size = src_file_stat.st_size;
+
+  if (sendfile(dst_fd, src_fd, NULL, src_size) != src_size) EBP(NULL);
+
+  close(src_fd);
+  close(dst_fd);
+}
+
+GLOBAL volatile bool want_to_reload_update_and_render = true;
+
+void
+signal_reload_update_and_render(int sig_num)
+{
+  want_to_reload_update_and_render = true;
+}
+
+typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
+
 int
 main(int argc, char *argv[])
 {
@@ -799,19 +832,16 @@ main(int argc, char *argv[])
   pulse_spec.rate = pulse_samples_per_second;
   pulse_spec.channels = pulse_num_channels;
 
-  // TODO(Ryan):
-  // this incurs a 67Mib allocation.
-  // libpulse allocates an additional 200Mib.
-  // why!?
-  // frequency seems to change after a period of long time running
+  // IMPORTANT(Ryan): With integrated audio card, over 100ms of latency is expected 
   pa_simple *pulse_player = pa_simple_new(NULL, "HHF", PA_STREAM_PLAYBACK, NULL, 
                                           "HHF Sound", &pulse_spec, NULL, NULL,
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
+  // TODO(Ryan): Handle audio skips when exceeding frame rate
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
-  s16 *pulse_buffer = (s16 *)calloc(sizeof(s16), pulse_buffer_num_samples);
+  s16 *pulse_buffer = (s16 *)calloc(pulse_buffer_num_samples, sizeof(s16));
   if (pulse_buffer == NULL) EBP(NULL);
 
   HHFSoundBuffer hhf_sound_buffer = {};
@@ -840,9 +870,34 @@ main(int argc, char *argv[])
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
   hhf_memory.permanent_size = hhf_transient_size;
 
+  HHFPlatform hhf_platform = {};
+  hhf_platform.read_entire_file = hhf_platform_read_entire_file;
+  hhf_platform.free_read_file_result = hhf_platform_free_read_file_result;
+  hhf_platform.write_entire_file = hhf_platform_write_entire_file;
+
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
+
+  char hhf_location[128] = {};
+  readlink("/proc/self/exe", hhf_location, sizeof(hhf_location));
+  char *last_slash = NULL;
+  for (char *cursor = hhf_location; *cursor != '\0'; ++cursor)
+  {
+    if (*cursor == '/') last_slash = cursor;
+  }
+  char hhf_lib_loc[128] = {};
+  char hhf_temp_lib_loc[128] = {};
+  snprintf(hhf_lib_loc, sizeof(hhf_lib_loc), "%.*s/hhf.so", 
+           (int)(last_slash - hhf_location), hhf_location);
+  snprintf(hhf_temp_lib_loc, sizeof(hhf_lib_loc), "%.*s/hhf.temp-so", 
+           (int)(last_slash - hhf_location), hhf_location);
+
+  // IMPORTANT(Ryan): Signals utilised as it seems that the modification time of a file is
+  // changed before writing has completed. 
+  signal(SIGUSR1, signal_reload_update_and_render);
+  void *update_and_render_lib = NULL;
+  hhf_update_and_render_t update_and_render = NULL;
 
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
@@ -888,11 +943,37 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
+            if (want_to_reload_update_and_render)
+            {
+              if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
+              copy_file(hhf_lib_loc, hhf_temp_lib_loc);
+              // TODO(Ryan): Understand how executables and shared objects exist in memory
+              update_and_render_lib = dlopen(hhf_temp_lib_loc, RTLD_NOW);
+              if (update_and_render_lib == NULL) EBP(NULL);
+              update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
+              if (update_and_render == NULL) EBP(dlerror());
+              want_to_reload_update_and_render = false;
+            }
+
+            update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
+                              &hhf_memory, &hhf_platform);
             input_passed_to_hhf = true;
 
-            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(pulse_buffer), 
+            if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_buffer_num_base_samples, 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
+
+            /*#if defined(HHF_INTERNAL)
+            {
+              int pad_x = 16, pad_y = 16;
+              int x0 = pad_x, x1 = width - pad_x;
+              int pos[30] = {}; // store 30 most recent
+              if (index > 30) index = 0;
+              debug_display_buffer()
+              {
+                // Assume length of buffer is same as width of back buffer
+              }
+            }
+            #endif*/
 
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
@@ -901,7 +982,8 @@ main(int argc, char *argv[])
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
-            //printf("ms per frame: %.02f\n", timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f); 
+            r32 ms_per_frame = timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f;
+            printf("ms per frame: %.02f\n", ms_per_frame); 
             //printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
 
             prev_timespec = end_timespec;
