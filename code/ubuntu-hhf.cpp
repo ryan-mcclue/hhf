@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 
 #include "hhf.h"
-#include "hhf.cpp"
 
 // platform specific last as OS may #define crazy things that override us
 
@@ -591,14 +590,14 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
 }
 
 void
-hhf_platform_free_file_memory(HHFPlatformReadFileResult *file_result)
+hhf_platform_free_read_file_result(HHFPlatformReadFileResult *file_result)
 {
   free(file_result->contents);
 }
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(char *file_name, size_t size, void *memory)
+hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
 {
   int result = 0;
 
@@ -706,15 +705,7 @@ end:
   return result;
 }
 
-INTERNAL void
-load_hhf_code(void)
-{
-  void (*hhf_update_and_render)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *) = NULL;
-  void *hhf_lib = dlopen("build/hhf.so", RTLD_NOW);
-  if (hhf_lib == NULL) EBP(NULL);
-  // dlsym(hhf_lib, "func_name");
-  // dlclose(hhf_lib);
-}
+typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
 
 int
 main(int argc, char *argv[])
@@ -848,6 +839,11 @@ main(int argc, char *argv[])
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
   hhf_memory.permanent_size = hhf_transient_size;
 
+  HHFPlatform hhf_platform = {};
+  hhf_platform.read_entire_file = hhf_platform_read_entire_file;
+  hhf_platform.free_read_file_result = hhf_platform_free_read_file_result;
+  hhf_platform.write_entire_file = hhf_platform_write_entire_file;
+
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
@@ -855,6 +851,11 @@ main(int argc, char *argv[])
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
+
+  long update_and_render_cur_mod_time = 0;
+  void *update_and_render_lib = NULL;
+  hhf_update_and_render_t update_and_render = NULL;
+  uint update_and_render_frame_counter = 180; 
 
   bool input_passed_to_hhf = false;
   int x_offset = 0, y_offset = 0;
@@ -888,6 +889,7 @@ main(int argc, char *argv[])
         udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, &hhf_cur_input);
       }
 
+
       if (xlib_event.type == GenericEvent)
       {
         XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
@@ -896,7 +898,29 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            hhf_update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, &hhf_memory);
+            // NOTE(Ryan): Give the compiler time to generate the new library
+            // TODO(Ryan): Introduce no wait time logic
+            if (++update_and_render_frame_counter > 180)
+            {
+              struct stat update_and_render_stat = {};
+              if (stat("build/hhf.so", &update_and_render_stat) == -1) EBP(NULL);
+              long update_and_render_mod_time = update_and_render_stat.st_mtim.tv_nsec;
+
+              if (update_and_render_mod_time != update_and_render_cur_mod_time)
+              {
+                if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
+                // TODO(Ryan): Understand how executables and shared objects exist in memory
+                update_and_render_lib = dlopen("build/hhf.so", RTLD_NOW);
+                if (update_and_render_lib == NULL) EBP(NULL);
+                update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
+                if (update_and_render == NULL) EBP(dlerror());
+                update_and_render_cur_mod_time = update_and_render_mod_time;
+              }
+              update_and_render_frame_counter = 0;
+            }
+
+            update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
+                              &hhf_memory, &hhf_platform);
             input_passed_to_hhf = true;
 
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_buffer_num_base_samples, 

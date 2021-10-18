@@ -26,8 +26,7 @@ ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-
 
 # TODO(Ryan): -O0 still removes unused variables?
 # -Og gives error on open() ...
-dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL
-  -Wl,-Map=build/ubuntu-hhf.map $ignored_warnings"
+dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL $ignored_warnings"
 # TODO(Ryan): memfault Usefulness of linker map files (analyse program size?)
 
 #"-ffunction-sections -fdata-sections"
@@ -42,4 +41,5 @@ g++ $common_flags $dev_flags \
   code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
   $libraries
 
-# g++ -g -fPIC code/hhf.cpp -shared -o build/hhf.so
+g++ $common_flags $dev_flags \
+  -fPIC code/hhf.cpp -shared -o build/hhf.so
