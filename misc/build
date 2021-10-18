@@ -43,3 +43,5 @@ g++ $common_flags $dev_flags \
 
 g++ $common_flags $dev_flags \
   -fPIC code/hhf.cpp -shared -o build/hhf.so
+
+# kill -SIGUSR1 $(pgrep ubuntu-hhf)

@@ -11,6 +11,8 @@
 #include <sys/epoll.h>
 #include <sys/poll.h>
 #include <sys/types.h>
+#include <sys/sendfile.h>
+#include <signal.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <time.h>
@@ -705,11 +707,39 @@ end:
   return result;
 }
 
+void
+copy_file(char *src_file, char *dst_file)
+{
+  int src_fd = open(src_file, O_RDONLY);
+  if (src_fd == -1) EBP(NULL);
+
+  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC);
+  if (dst_fd == -1) EBP(NULL);
+  if (fchmod(dst_fd, 0777) == -1) EBP(NULL);
+
+  struct stat src_file_stat = {};
+  if (fstat(src_fd, &src_file_stat) == -1) EBP(NULL);
+  int src_size = src_file_stat.st_size;
+
+  if (sendfile(dst_fd, src_fd, NULL, src_size) != src_size) EBP(NULL);
+
+  close(src_fd);
+  close(dst_fd);
+}
+
+void
+load_update_and_render(int sig_num)
+{
+
+}
+
 typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
 
 int
 main(int argc, char *argv[])
 {
+  // signal(SIGUSR1, load_update_and_render);
+ 
   Display *xlib_display = XOpenDisplay(NULL);
   if (xlib_display == NULL) BP(NULL);
 
@@ -852,6 +882,8 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
+  copy_file("build/file.txt", "build/file-copy.txt");
+
   long update_and_render_cur_mod_time = 0;
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
@@ -889,7 +921,6 @@ main(int argc, char *argv[])
         udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, &hhf_cur_input);
       }
 
-
       if (xlib_event.type == GenericEvent)
       {
         XGenericEventCookie *cookie = (XGenericEventCookie *)&xlib_event.xcookie;
@@ -898,25 +929,22 @@ main(int argc, char *argv[])
           XGetEventData(xlib_display, cookie);
           if (cookie->evtype == PresentCompleteNotify)
           {
-            // NOTE(Ryan): Give the compiler time to generate the new library
-            // TODO(Ryan): Introduce no wait time logic
-            if (++update_and_render_frame_counter > 180)
-            {
-              struct stat update_and_render_stat = {};
-              if (stat("build/hhf.so", &update_and_render_stat) == -1) EBP(NULL);
-              long update_and_render_mod_time = update_and_render_stat.st_mtim.tv_nsec;
+            // SIGUSR1
+            
+            struct stat update_and_render_stat = {};
+            if (stat("build/hhf.so", &update_and_render_stat) == -1) EBP(NULL);
+            long update_and_render_mod_time = update_and_render_stat.st_mtim.tv_nsec;
 
-              if (update_and_render_mod_time != update_and_render_cur_mod_time)
-              {
-                if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
-                // TODO(Ryan): Understand how executables and shared objects exist in memory
-                update_and_render_lib = dlopen("build/hhf.so", RTLD_NOW);
-                if (update_and_render_lib == NULL) EBP(NULL);
-                update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
-                if (update_and_render == NULL) EBP(dlerror());
-                update_and_render_cur_mod_time = update_and_render_mod_time;
-              }
-              update_and_render_frame_counter = 0;
+            if (update_and_render_mod_time != update_and_render_cur_mod_time)
+            {
+              if (update_and_render_lib != NULL) dlclose(update_and_render_lib);
+              copy_file("build/hhf.so", "build/hhf-temp.so");
+              // TODO(Ryan): Understand how executables and shared objects exist in memory
+              update_and_render_lib = dlopen("build/hhf-temp.so", RTLD_NOW);
+              if (update_and_render_lib == NULL) EBP(NULL);
+              update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
+              if (update_and_render == NULL) EBP(dlerror());
+              update_and_render_cur_mod_time = update_and_render_mod_time;
             }
 
             update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
