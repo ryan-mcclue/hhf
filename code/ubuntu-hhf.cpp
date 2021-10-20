@@ -228,6 +228,7 @@ xlib_back_buffer_update_render_pict(Display *display, XlibBackBuffer *back_buffe
                          back_buffer->render_pict.fmt, 0, 
                          &back_buffer->render_pict.attr);
 
+  // TODO(Ryan): Implement scaling ourselves
   double x_scale = back_buffer->width / (double)window_width;
   double y_scale = back_buffer->height / (double)window_height;
   back_buffer->render_pict.transform_matrix = {{
@@ -473,10 +474,10 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       u16 dev_event_code = dev_events[dev_event_i].code;
       s32 dev_event_value = dev_events[dev_event_i].value;
 
-      if (dev_event_type == EV_KEY)
-      {
-         printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
-      }
+      //if (dev_event_type == EV_KEY)
+      //{
+      //   printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      //}
       
       if (dev_event_type == EV_SYN) continue;
 
@@ -587,6 +588,19 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       }
 #if defined(HHF_INTERNAL)
       if (dev_event_code == KEY_F12) want_to_run = false;
+      //if (dev_event_code == KEY_R)
+      //{
+      //  if (!are_recording_input)
+      //  {
+      //    are_recording_input = true;
+      //    are_playing_input = false;
+      //  }
+      //  else
+      //  {
+      //    are_recording_input = false;
+      //    are_playing_input = true;
+      //  }
+      //}
 #endif
     }
   }
@@ -728,6 +742,31 @@ copy_file(char *src_file, char *dst_file)
   close(dst_fd);
 }
 
+INTERNAL void
+begin_recording_input(void)
+{
+  int input_recording_handle = open();
+  write(memory);
+}
+
+INTERNAL void
+end_recording_input(void)
+{
+  close(input_recording_handle);
+}
+
+INTERNAL void
+playback_input(void)
+{
+  read(handle, new_input, sizeof(*new_input));
+  if (end_of_file)
+  {
+    // or just seek?
+    end_recording_input();
+    begin_playing_input();
+  }
+}
+
 GLOBAL volatile bool want_to_reload_update_and_render = true;
 
 void
@@ -859,8 +898,13 @@ main(int argc, char *argv[])
 #else
   void *hhf_memory_raw_base_addr = NULL;
 #endif
+  // NOTE(Ryan): Virtual memory is prevalent. As the lookup is not free, most CPUs have a
+  // MMU (MMU contains translation lookaside buffer which is a cache of mappings)
+  // So, by enabling large page size, we can alleviate the TLB
   void *hhf_memory_raw = mmap(hhf_memory_raw_base_addr, hhf_memory_raw_size, 
-                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                              PROT_READ | PROT_WRITE, 
+                              MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGETLB, 
+                              -1, 0);
   if (hhf_memory_raw == MAP_FAILED) EBP(NULL);
 
   memset(hhf_memory_raw, 0x00, hhf_memory_raw_size);
@@ -875,10 +919,11 @@ main(int argc, char *argv[])
   hhf_platform.free_read_file_result = hhf_platform_free_read_file_result;
   hhf_platform.write_entire_file = hhf_platform_write_entire_file;
 
-  xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
-                               xrandr_active_crtc.crtc, &xlib_back_buffer, 
-                               xlib_window_width, xlib_window_height);
+  // TODO(Ryan): Replace breakpoints with proper NULL and error handling
 
+  // TODO(Ryan): write() prevents sparseness
+
+  // TODO(Ryan): Use PATH_MAX from <linux/limits.h>?
   char hhf_location[128] = {};
   readlink("/proc/self/exe", hhf_location, sizeof(hhf_location));
   char *last_slash = NULL;
@@ -899,12 +944,16 @@ main(int argc, char *argv[])
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
 
+  xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
+                               xrandr_active_crtc.crtc, &xlib_back_buffer, 
+                               xlib_window_width, xlib_window_height);
+
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
+  int input_recording_index = 0, input_playing_index = 0;
   bool input_passed_to_hhf = false;
-  int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
     XEvent xlib_event = {};
@@ -954,6 +1003,16 @@ main(int argc, char *argv[])
               if (update_and_render == NULL) EBP(dlerror());
               want_to_reload_update_and_render = false;
             }
+            
+            //if (are_recording_input)
+            //{
+            //  record_state(&hhf_memory, &hhf_cur_input);
+            //}
+            //if (are_playing_input)
+            //{
+            //  wrap in struct to preserve original input and memory
+            //  playback_state(&hhf_memory, &hhf_cur_input);
+            //}
 
             update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
                               &hhf_memory, &hhf_platform);
@@ -994,6 +1053,7 @@ main(int argc, char *argv[])
       }
 
       // NOTE(Ryan): Preserve transition count if not passed to hhf
+      // TODO(Ryan): For speed just exchange pointers
       hhf_prev_input = hhf_cur_input;
       if (input_passed_to_hhf)
       {

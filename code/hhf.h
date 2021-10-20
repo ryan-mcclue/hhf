@@ -169,10 +169,3 @@ struct HHFPlatform
 void
 hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer,
                       HHFInput *input, HHFMemory *memory, HHFPlatform *platform);
-
-// TODO(Ryan): The platform layer does not need to know about this
-struct HHFState
-{
-  int x_offset;
-  int y_offset;
-};

@@ -47,3 +47,9 @@ g++ $common_flags $dev_flags \
   -fPIC code/hhf.cpp -shared -o build/hhf.so
 # NOTE(Ryan): 10 == SIGUSR1
 test -n "$ubuntu_hhf_pid" && kill -10 $ubuntu_hhf_pid
+
+# TODO(Ryan): Place .gdbinit inside build/ folder.
+# Our working directory should be data/ as this where files will be zipped for distribution
+
+# TODO(Ryan): Sysinfo script, e.g. ram, cpu, stack, wm, desktop environment, kernel,
+# display, solid state, etc.

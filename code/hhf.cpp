@@ -2,6 +2,15 @@
 
 #include "hhf.h"
 
+struct HHFState
+{
+  int x_offset;
+  int y_offset;
+
+  int player_x;
+  int player_y;
+};
+
 INTERNAL void
 render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
 {
@@ -58,6 +67,8 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
   {
     state->x_offset = 0;
     state->y_offset = 0;
+    state->player_x = 200;
+    state->player_y = 200;
     memory->is_initialized = true;
   }
 
@@ -68,20 +79,37 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
     HHFInputController controller = input->controllers[controller_i];
     if (controller.is_connected)
     {
-      // digital tuning
-      if (controller.action_left.ended_down) state->x_offset -= 2;
-      if (controller.action_right.ended_down) state->x_offset += 2;
-      if (controller.action_up.ended_down) state->y_offset -= 2;
-      if (controller.action_down.ended_down) state->y_offset += 2;
-
       // analog override
       if (controller.is_analog)
       {
       }
+      else
+      {
+        // digital tuning
+        if (controller.action_left.ended_down) state->x_offset -= 2;
+        if (controller.action_right.ended_down) state->x_offset += 2;
+        if (controller.action_up.ended_down) state->y_offset -= 2;
+        if (controller.action_down.ended_down) state->y_offset += 2;
+
+        if (controller.move_left.ended_down) state->player_x -= 2;
+        if (controller.move_right.ended_down) state->player_x += 2;
+
+        // if (controller.move_up.ended_down) state->tone_hz += 2;
+      }
+
     }
   }
 
   render_weird_gradient(back_buffer, state->x_offset, state->y_offset);
+
+  for (int y = state->player_y; y < state->player_y + 10; ++y)
+  {
+    for (int x = state->player_x; x < state->player_x + 10; ++x)
+    {
+      u32 *pixel = (u32 *)back_buffer->memory + x + (y * back_buffer->width);
+      *pixel++ = 0xffffffff;
+    }
+  }
 
   output_sound(sound_buffer);
 }
