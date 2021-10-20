@@ -52,4 +52,6 @@ test -n "$ubuntu_hhf_pid" && kill -10 $ubuntu_hhf_pid
 # Our working directory should be data/ as this where files will be zipped for distribution
 
 # TODO(Ryan): Sysinfo script, e.g. ram, cpu, stack, wm, desktop environment, kernel,
-# display, solid state, etc.
+# display, solid state, etc. (htop good for memory usage)
+# Look at processor spec sheet for max memory bandwidth (cache bandwidth should be much higher)
+# dmidecode useful also

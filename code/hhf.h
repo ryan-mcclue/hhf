@@ -73,6 +73,11 @@ safe_truncate_u64(u64 val)
   return (u32)val;
 }
 
+// NOTE(Ryan): This is pre-emption to make it easier to identify what thread we are in
+struct HHFThreadContext
+{
+  int placeholder;
+};
 
 struct HHFBackBuffer
 {
@@ -136,6 +141,24 @@ struct HHFInputController
 #define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
+#if defined(HHF_INTERNAL)
+  u32 loop_terminator;
+#endif
+  union
+  {
+    HHFInputButtonState mouse_buttons[3];
+    __extension__ struct
+    {
+      HHFInputButtonState mouse_left;
+      HHFInputButtonState mouse_middle;
+      HHFInputButtonState mouse_right;
+    };
+  };
+  s32 mouse_x, mouse_y, mouse_z; // z is wheel
+  // XWindowAttr attr = {};
+  // XGetWindowAttributes(display, window, &attr);
+  // attr.x, attr.y
+
   // TODO(Ryan): Insert timing values here
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
@@ -161,11 +184,12 @@ struct HHFPlatformReadFileResult
 
 struct HHFPlatform
 {
-  HHFPlatformReadFileResult (*read_entire_file)(char *file_name);
-  void (*free_read_file_result)(HHFPlatformReadFileResult *read_result);
-  int (*write_entire_file)(char *filename, void *memory, size_t size);
+  HHFPlatformReadFileResult (*read_entire_file)(HHFThreadContext *thread, char *file_name);
+  void (*free_read_file_result)(HHFThreadContext *thread, HHFPlatformReadFileResult *read_result);
+  int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, size_t size);
 };
 
 void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer,
-                      HHFInput *input, HHFMemory *memory, HHFPlatform *platform);
+hhf_update_and_render(HHFThreadContext *thread, HHFBackBuffer *back_buffer, 
+                      HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
+                      HHFPlatform *platform);

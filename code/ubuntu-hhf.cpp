@@ -746,6 +746,11 @@ INTERNAL void
 begin_recording_input(void)
 {
   int input_recording_handle = open();
+  // Modern systems have first-party DMA (bus mastering, i.e. devices directly with RAM)
+  // as oppose to third-party DMA (DMA controller on southbridge of motherboard)
+  // DMA controller not useful, largely pointless as source of sta
+  // create memory mapped file with HHFMemory initially written to it.
+  // use a separate file for input
   write(memory);
 }
 
@@ -877,7 +882,7 @@ main(int argc, char *argv[])
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
-  // TODO(Ryan): Handle audio skips when exceeding frame rate
+  // TODO(Ryan): Handle audio skips when exceeding frame rate (utilise past frame time)
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 *pulse_buffer = (s16 *)calloc(pulse_buffer_num_samples, sizeof(s16));
@@ -1018,6 +1023,7 @@ main(int argc, char *argv[])
                               &hhf_memory, &hhf_platform);
             input_passed_to_hhf = true;
 
+            // TODO(Ryan): Add however long last frame took to audio minimum size
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_buffer_num_base_samples, 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
 
