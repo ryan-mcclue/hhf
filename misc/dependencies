@@ -8,6 +8,9 @@ device_debugging="evtest udevadm fftest"
 x11_debugging="x11-xserver-utils"
 # NOTE(Ryan): Principally aplay cmd-line tool
 alsa_debugging="alsa-utils"
+# NOTE(Ryan): Ensure cpu virtualisation flags set from BIOS
+# Inside of VM: $(mount -t 9p -o trans=virtio /virt-targetpoint-folder /actual-folder)
+system_debugging="virt-manager qemu-kvm htop"
 
 essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev libudev-dev libpulse-dev"
 
@@ -17,7 +20,7 @@ sudo apt install $essential
 member_of_input="$(id -nG "$USER" | grep "input")"
 if test ! "$member_of_input"; then
   usermod -a "$USER" -G input
-  printf "\n\nMust log out and log back in for user to access evdev\n"
+  printf "\n\nMust reboot for user to access evdev (logging out might work)\n"
 fi
 
 # NOTE(Ryan): For intel vtune

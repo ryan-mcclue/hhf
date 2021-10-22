@@ -189,7 +189,7 @@ struct HHFPlatform
   int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, size_t size);
 };
 
-void
-hhf_update_and_render(HHFThreadContext *thread, HHFBackBuffer *back_buffer, 
+extern "C" void
+hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
                       HHFPlatform *platform);

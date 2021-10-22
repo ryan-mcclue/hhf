@@ -58,7 +58,9 @@ output_sound(HHFSoundBuffer *sound_buffer)
 }
 
 extern "C" void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory)
+hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
+                      HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
+                      HHFPlatform *platform)
 {
   ASSERT(sizeof(HHFState) <= memory->permanent_size);
 

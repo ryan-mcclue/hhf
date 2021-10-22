@@ -607,14 +607,14 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
 }
 
 void
-hhf_platform_free_read_file_result(HHFPlatformReadFileResult *file_result)
+hhf_platform_free_read_file_result(HHFThreadContext *thread_context, HHFPlatformReadFileResult *file_result)
 {
   free(file_result->contents);
 }
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
+hhf_platform_write_entire_file(HHFThreadContext *thread_context, char *file_name, void *memory, size_t size)
 {
   int result = 0;
 
@@ -622,7 +622,7 @@ hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
   u8 *byte_location = NULL;
   int file_fd = 0;
 
-  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC); 
+  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC, 0777); 
   if (open_res < 0) 
   {
     EBP(NULL);
@@ -661,7 +661,7 @@ end:
 // Avoid round tripping by writing to a queue
 // Introduce streaming, i.e background loading
 HHFPlatformReadFileResult
-hhf_platform_read_entire_file(char *file_name)
+hhf_platform_read_entire_file(HHFThreadContext *thread_context, char *file_name)
 {
   HHFPlatformReadFileResult result = {0};
 
@@ -728,9 +728,8 @@ copy_file(char *src_file, char *dst_file)
   int src_fd = open(src_file, O_RDONLY);
   if (src_fd == -1) EBP(NULL);
 
-  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC);
+  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC, 0777);
   if (dst_fd == -1) EBP(NULL);
-  if (fchmod(dst_fd, 0777) == -1) EBP(NULL);
 
   struct stat src_file_stat = {};
   if (fstat(src_fd, &src_file_stat) == -1) EBP(NULL);
@@ -742,35 +741,35 @@ copy_file(char *src_file, char *dst_file)
   close(dst_fd);
 }
 
-INTERNAL void
-begin_recording_input(void)
-{
-  int input_recording_handle = open();
-  // Modern systems have first-party DMA (bus mastering, i.e. devices directly with RAM)
-  // as oppose to third-party DMA (DMA controller on southbridge of motherboard)
-  // DMA controller not useful, largely pointless as source of sta
-  // create memory mapped file with HHFMemory initially written to it.
-  // use a separate file for input
-  write(memory);
-}
+//INTERNAL void
+//begin_recording_input(void)
+//{
+//  int input_recording_handle = open();
+//  // Modern systems have first-party DMA (bus mastering, i.e. devices directly with RAM)
+//  // as oppose to third-party DMA (DMA controller on southbridge of motherboard)
+//  // DMA controller not useful, largely pointless as source of sta
+//  // create memory mapped file with HHFMemory initially written to it.
+//  // use a separate file for input
+//  write(memory);
+//}
 
-INTERNAL void
-end_recording_input(void)
-{
-  close(input_recording_handle);
-}
-
-INTERNAL void
-playback_input(void)
-{
-  read(handle, new_input, sizeof(*new_input));
-  if (end_of_file)
-  {
-    // or just seek?
-    end_recording_input();
-    begin_playing_input();
-  }
-}
+//INTERNAL void
+//end_recording_input(void)
+//{
+//  close(input_recording_handle);
+//}
+//
+//INTERNAL void
+//playback_input(void)
+//{
+//  read(handle, new_input, sizeof(*new_input));
+//  if (end_of_file)
+//  {
+//    // or just seek?
+//    end_recording_input();
+//    begin_playing_input();
+//  }
+//}
 
 GLOBAL volatile bool want_to_reload_update_and_render = true;
 
@@ -780,7 +779,7 @@ signal_reload_update_and_render(int sig_num)
   want_to_reload_update_and_render = true;
 }
 
-typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
+typedef void (*hhf_update_and_render_t)(HHFThreadContext *, HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
 
 int
 main(int argc, char *argv[])
@@ -906,9 +905,11 @@ main(int argc, char *argv[])
   // NOTE(Ryan): Virtual memory is prevalent. As the lookup is not free, most CPUs have a
   // MMU (MMU contains translation lookaside buffer which is a cache of mappings)
   // So, by enabling large page size, we can alleviate the TLB
+  // However, large page size must be enabled via a kernel boot param (so leave for now)
+  // This can be acheived with boot-repair under grub options
   void *hhf_memory_raw = mmap(hhf_memory_raw_base_addr, hhf_memory_raw_size, 
                               PROT_READ | PROT_WRITE, 
-                              MAP_ANONYMOUS | MAP_PRIVATE | MAP_HUGETLB, 
+                              MAP_ANONYMOUS | MAP_PRIVATE, 
                               -1, 0);
   if (hhf_memory_raw == MAP_FAILED) EBP(NULL);
 
@@ -918,6 +919,8 @@ main(int argc, char *argv[])
   hhf_memory.permanent_size = hhf_permanent_size;
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
   hhf_memory.permanent_size = hhf_transient_size;
+
+  HHFThreadContext hhf_thread_context = {};
 
   HHFPlatform hhf_platform = {};
   hhf_platform.read_entire_file = hhf_platform_read_entire_file;
@@ -1019,7 +1022,7 @@ main(int argc, char *argv[])
             //  playback_state(&hhf_memory, &hhf_cur_input);
             //}
 
-            update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
+            update_and_render(&hhf_thread_context, &hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
                               &hhf_memory, &hhf_platform);
             input_passed_to_hhf = true;
 
