@@ -26,6 +26,7 @@
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
+#define _NET_WM_STATE_TOGGLE (2)
 
 #include <libudev.h>
 enum UDEV_DEVICE_TYPE
@@ -54,6 +55,14 @@ struct UdevPollDevice
 #include <pulse/error.h>
 
 GLOBAL bool want_to_run = true;
+
+struct XlibInfo 
+{
+  Display *display;
+  Window root, window;
+  int window_width, window_height;
+  Atom state, maxh, maxv, fullscreen;
+};
 
 INTERNAL void
 udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
@@ -455,7 +464,7 @@ udev_process_analog_button(HHFInputButtonState *prev_button_state_neg,
 INTERNAL void
 udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
                         HHFInput *prev_input, HHFInput *cur_input,
-                        int window_width, int window_height)
+                        XlibInfo *info)
 {
   struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
   int num_epoll_events = epoll_wait(epoll_fd, epoll_events, EPOLL_UDEV_MAX_EVENTS, 0);
@@ -496,9 +505,9 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
         {
           cur_input->mouse_x = 0;
         }
-        else if (cur_input->mouse_x + dev_event_value > window_width)
+        else if (cur_input->mouse_x + dev_event_value > info->window_width)
         {
-          cur_input->mouse_x = window_width;
+          cur_input->mouse_x = info->window_width;
         }
         else
         {
@@ -511,9 +520,9 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
         {
           cur_input->mouse_y = 0;
         }
-        else if (cur_input->mouse_y + dev_event_value > window_height)
+        else if (cur_input->mouse_y + dev_event_value > info->window_height)
         {
-          cur_input->mouse_y = window_height;
+          cur_input->mouse_y = info->window_height;
         }
         else
         {
@@ -622,7 +631,38 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
                                     &cur_controller_state->start, is_down);
       }
 #if defined(HHF_INTERNAL)
+      if (dev_event_code == KEY_F10 && first_down)
+      {
+        XClientMessageEvent maximise_ev = {};
+        maximise_ev.type = ClientMessage;
+        maximise_ev.format = 32;
+        maximise_ev.window = info->window;
+        maximise_ev.message_type = info->state;
+        maximise_ev.data.l[0] = _NET_WM_STATE_TOGGLE; 
+        maximise_ev.data.l[1] = info->maxh;
+        maximise_ev.data.l[2] = info->maxv;
+        maximise_ev.data.l[3] = 1;
+        
+        XSendEvent(info->display, info->root, False, 
+                   SubstructureNotifyMask, (XEvent *)&maximise_ev);
+      }
+      if (dev_event_code == KEY_F11 && first_down)
+      {
+        XClientMessageEvent maximise_ev = {};
+        maximise_ev.type = ClientMessage;
+        maximise_ev.format = 32;
+        maximise_ev.window = info->window;
+        maximise_ev.message_type = info->state;
+        maximise_ev.data.l[0] = _NET_WM_STATE_TOGGLE; 
+        maximise_ev.data.l[1] = info->fullscreen;
+        maximise_ev.data.l[3] = 1;
+        
+        XSendEvent(info->display, info->root, False, 
+                   SubstructureNotifyMask, (XEvent *)&maximise_ev);
+      }
       if (dev_event_code == KEY_F12) want_to_run = false;
+
+  
       //if (dev_event_code == KEY_R)
       //{
       //  if (!are_recording_input)
@@ -684,8 +724,6 @@ hhf_platform_write_entire_file(HHFThreadContext *thread_context, char *file_name
       byte_location += bytes_written;
     }
   }
-  // IMPORTANT(Ryan): Allow other programs to use the files created inside the debugger
-  fchmod(file_fd, S_IROTH | S_IWOTH);
 end_open:
   close(file_fd); 
 end:
@@ -806,12 +844,14 @@ copy_file(char *src_file, char *dst_file)
 //  }
 //}
 
-GLOBAL volatile bool want_to_reload_update_and_render = true;
+// NOTE(Ryan): Not actually atomic, just ensuring that read and write in one go.
+// e.g. long long might require several instructions with lower and upper bits
+GLOBAL volatile sig_atomic_t want_to_reload_update_and_render = 1;
 
 void
 signal_reload_update_and_render(int sig_num)
 {
-  want_to_reload_update_and_render = true;
+  want_to_reload_update_and_render = 1;
 }
 
 typedef void (*hhf_update_and_render_t)(HHFThreadContext *, HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
@@ -861,14 +901,36 @@ main(int argc, char *argv[])
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
+  Atom xlib_netwm_state_atom = XInternAtom(xlib_display, "_NET_WM_STATE", False);
+  Atom xlib_netwm_state_maxh_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+  Atom xlib_netwm_state_maxv_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+  Atom xlib_netwm_state_fullscreen_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_FULLSCREEN", False);
+  if (xlib_netwm_state_atom == None || xlib_netwm_state_maxv_atom == None || 
+      xlib_netwm_state_maxh_atom == None || xlib_netwm_state_fullscreen_atom == None) BP(NULL);
+
+  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
+  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
+
+  XlibInfo xlib_info = {};
+  xlib_info.window_width = xlib_window_width;
+  xlib_info.window_height = xlib_window_height;
+  xlib_info.display = xlib_display;
+  xlib_info.root = xlib_root_window;
+  xlib_info.window = xlib_window;
+  xlib_info.state = xlib_netwm_state_atom;
+  xlib_info.maxh = xlib_netwm_state_maxh_atom;
+  xlib_info.maxv = xlib_netwm_state_maxv_atom;
+  xlib_info.fullscreen = xlib_netwm_state_fullscreen_atom;
+
   GC xlib_gc = XDefaultGC(xlib_display, xlib_screen);
 
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
   if (xlib_wm_delete_atom == None) BP(NULL);
   if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False) BP(NULL);
 
-  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
-  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
   int xlib_back_buffer_width = 1280;
   int xlib_back_buffer_height = 720;
   XlibBackBuffer xlib_back_buffer = \
@@ -992,9 +1054,14 @@ main(int argc, char *argv[])
 
   // IMPORTANT(Ryan): Signals utilised as it seems that the modification time of a file is
   // changed before writing has completed. 
-  signal(SIGUSR1, signal_reload_update_and_render);
+  struct sigaction signal_reload_act = {};
+  signal_reload_act.sa_handler = signal_reload_update_and_render;
+  if (sigaction(SIGUSR1, &signal_reload_act, NULL) == -1) EBP(NULL);
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
+
+  // only hide on fullscreen
+  // XFixesHideCursor(xlib_display, xlib_root_window);
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
@@ -1016,8 +1083,8 @@ main(int argc, char *argv[])
 
       if (xlib_event.type == ConfigureNotify)
       {
-          xlib_window_width = xlib_event.xconfigure.width;
-          xlib_window_height = xlib_event.xconfigure.height;
+          xlib_info.window_width = xlib_event.xconfigure.width;
+          xlib_info.window_height = xlib_event.xconfigure.height;
           //printf("x: %d, y: %d\n", xlib_event.xconfigure.x, xlib_event.xconfigure.y);
       }
 
@@ -1036,7 +1103,7 @@ main(int argc, char *argv[])
       if (xlib_focused_window == xlib_window)
       {
         udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
-                                &hhf_cur_input, xlib_window_width, xlib_window_height);
+                                &hhf_cur_input, &xlib_info);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -1056,7 +1123,7 @@ main(int argc, char *argv[])
               if (update_and_render_lib == NULL) EBP(NULL);
               update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
               if (update_and_render == NULL) EBP(dlerror());
-              want_to_reload_update_and_render = false;
+              want_to_reload_update_and_render = 0;
             }
             
             //if (are_recording_input)
@@ -1092,7 +1159,7 @@ main(int argc, char *argv[])
 
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
-                                         xlib_window_width, xlib_window_height);
+                                         xlib_info.window_width, xlib_info.window_height);
             
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
