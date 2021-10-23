@@ -16,6 +16,8 @@
 #define LOCAL_PERSIST static
 #define BILLION 1000000000L
 
+#define CLEAR_ASCII_ESCAPE "\033[1;1H\033[2K"
+
 typedef unsigned int uint;
 
 typedef uint8_t u8;
@@ -141,17 +143,14 @@ struct HHFInputController
 #define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
-#if defined(HHF_INTERNAL)
-  u32 loop_terminator;
-#endif
   union
   {
-    HHFInputButtonState mouse_buttons[3];
+    bool mouse_buttons[3];
     __extension__ struct
     {
-      HHFInputButtonState mouse_left;
-      HHFInputButtonState mouse_middle;
-      HHFInputButtonState mouse_right;
+      bool mouse_left;
+      bool mouse_middle;
+      bool mouse_right;
     };
   };
   s32 mouse_x, mouse_y, mouse_z; // z is wheel

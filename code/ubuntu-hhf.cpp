@@ -2,8 +2,6 @@
 
 #include "hhf.h"
 
-// platform specific last as OS may #define crazy things that override us
-
 #include <x86intrin.h>
 
 #include <sys/mman.h>
@@ -66,13 +64,12 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
-  char *dev_prop = \
-    (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
+  char *dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
 
   // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
-  //dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
-  //if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
 
   dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
@@ -90,16 +87,19 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
       event.data.fd = dev_fd;
       epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
 
-      UdevPollDevice *dev = &poll_devices[dev_fd];
-      dev->type = dev_type;
-
-      ASSERT(hhf_i < HHF_INPUT_MAX_NUM_CONTROLLERS);
-      input->controllers[hhf_i].is_connected = true;
-      if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
+      if (dev_type != UDEV_DEVICE_TYPE_MOUSE)
       {
-        input->controllers[hhf_i].is_analog = true;
+        UdevPollDevice *dev = &poll_devices[dev_fd];
+        dev->type = dev_type;
+
+        ASSERT(hhf_i < HHF_INPUT_MAX_NUM_CONTROLLERS);
+        input->controllers[hhf_i].is_connected = true;
+        if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
+        {
+          input->controllers[hhf_i].is_analog = true;
+        }
+        dev->hhf_i = hhf_i++;
       }
-      dev->hhf_i = hhf_i++;
 
       //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
@@ -454,7 +454,8 @@ udev_process_analog_button(HHFInputButtonState *prev_button_state_neg,
 
 INTERNAL void
 udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
-                        HHFInput *prev_input, HHFInput *cur_input)
+                        HHFInput *prev_input, HHFInput *cur_input,
+                        int window_width, int window_height)
 {
   struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
   int num_epoll_events = epoll_wait(epoll_fd, epoll_events, EPOLL_UDEV_MAX_EVENTS, 0);
@@ -486,11 +487,45 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
       bool is_down = (first_down || was_down);
 
+      if (dev_event_code == BTN_LEFT) cur_input->mouse_left = is_down;
+      if (dev_event_code == BTN_RIGHT) cur_input->mouse_right = is_down;
+      if (dev_event_code == BTN_MIDDLE) cur_input->mouse_middle = is_down;
+      if (dev_event_code == REL_X) 
+      {
+        if (cur_input->mouse_x + dev_event_value < 0)
+        {
+          cur_input->mouse_x = 0;
+        }
+        else if (cur_input->mouse_x + dev_event_value > window_width)
+        {
+          cur_input->mouse_x = window_width;
+        }
+        else
+        {
+          cur_input->mouse_x += dev_event_value;
+        }
+      }
+      if (dev_event_code == REL_Y) 
+      {
+        if (cur_input->mouse_y + dev_event_value < 0)
+        {
+          cur_input->mouse_y = 0;
+        }
+        else if (cur_input->mouse_y + dev_event_value > window_height)
+        {
+          cur_input->mouse_y = window_height;
+        }
+        else
+        {
+          cur_input->mouse_y += dev_event_value;
+        }
+      }
+      if (dev_event_code == REL_WHEEL) cur_input->mouse_z += dev_event_value;
+
       HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
       HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
       // TODO(Ryan): Gamepad cannot vibrate
-      // TODO(Ryan): Multiple keyboards results in lag
       if (dev_event_code == BTN_DPAD_LEFT || dev_event_code == KEY_A)
       {
         udev_process_digital_button(&prev_controller_state->move_left, 
@@ -851,6 +886,15 @@ main(int argc, char *argv[])
       ARRAY_LEN(hhf_cur_input.controllers[0].buttons);
   ASSERT(hhf_input_controller_buttons_bounds_check);
 
+  Window root_win = 0, child_win = 0;
+  int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
+  unsigned int mask = 0;
+  XQueryPointer(xlib_display, xlib_window, &root_win, &child_win,
+                &root_x, &root_y, &win_x, &win_y, &mask);
+  // NOTE(Ryan): Mouse hardware only give relative events, so require Xlib to give us absolute
+  hhf_cur_input.mouse_x = win_x;
+  hhf_cur_input.mouse_y = win_y;
+
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
 
@@ -956,6 +1000,7 @@ main(int argc, char *argv[])
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 
                                xlib_window_width, xlib_window_height);
 
+
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
@@ -973,6 +1018,7 @@ main(int argc, char *argv[])
       {
           xlib_window_width = xlib_event.xconfigure.width;
           xlib_window_height = xlib_event.xconfigure.height;
+          //printf("x: %d, y: %d\n", xlib_event.xconfigure.x, xlib_event.xconfigure.y);
       }
 
       if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
@@ -989,7 +1035,8 @@ main(int argc, char *argv[])
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
       if (xlib_focused_window == xlib_window)
       {
-        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, &hhf_cur_input);
+        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
+                                &hhf_cur_input, xlib_window_width, xlib_window_height);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -1046,12 +1093,12 @@ main(int argc, char *argv[])
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
                                          xlib_window_width, xlib_window_height);
-
+            
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
             r32 ms_per_frame = timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f;
-            printf("ms per frame: %.02f\n", ms_per_frame); 
+            //printf("ms per frame: %.02f\n", ms_per_frame); 
             //printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
 
             prev_timespec = end_timespec;
@@ -1067,6 +1114,8 @@ main(int argc, char *argv[])
       if (input_passed_to_hhf)
       {
         hhf_cur_input = {};
+        hhf_cur_input.mouse_x = hhf_prev_input.mouse_x; 
+        hhf_cur_input.mouse_y = hhf_prev_input.mouse_y;
         for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; controller_i++)
         {
           HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];

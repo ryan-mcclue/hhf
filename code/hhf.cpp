@@ -78,6 +78,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   // whether the user 'dashed'
   for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; ++controller_i)
   {
+    // printf("mouse x: %d, mouse y: %d, mouse z: %d\n", input->mouse_x, input->mouse_y, input->mouse_z);
     HHFInputController controller = input->controllers[controller_i];
     if (controller.is_connected)
     {
