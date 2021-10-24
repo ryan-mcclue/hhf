@@ -529,7 +529,7 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
           cur_input->mouse_y += dev_event_value;
         }
       }
-      if (dev_event_code == REL_WHEEL) cur_input->mouse_z += dev_event_value;
+      if (dev_event_code == REL_WHEEL) cur_input->mouse_wheel += dev_event_value;
 
       HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
       HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
@@ -893,6 +893,10 @@ main(int argc, char *argv[])
       xlib_visual_info.visual, attribute_mask, &xlib_window_attr);
 
   XStoreName(xlib_display, xlib_window, "HHF");
+  XClassHint xlib_class_hint = {};
+  xlib_class_hint.res_name = "HHF";
+  xlib_class_hint.res_class = "Game";
+  XSetClassHint(xlib_display, xlib_window, &xlib_class_hint);
 
   int xpresent_op = 0, event = 0, error = 0;
   XPresentQueryExtension(xlib_display, &xpresent_op, &event, &error);
@@ -931,6 +935,8 @@ main(int argc, char *argv[])
   if (xlib_wm_delete_atom == None) BP(NULL);
   if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False) BP(NULL);
 
+  // TODO(Ryan): For shipping, want 1920 x 1080 x 60Hz
+  // For software, 1/8 so 960 x 540 x 30Hz
   int xlib_back_buffer_width = 1280;
   int xlib_back_buffer_height = 720;
   XlibBackBuffer xlib_back_buffer = \
@@ -941,6 +947,11 @@ main(int argc, char *argv[])
   hhf_back_buffer.width = xlib_back_buffer.width;
   hhf_back_buffer.height = xlib_back_buffer.height;
   hhf_back_buffer.memory = xlib_back_buffer.memory;
+
+  XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
+                                                               xlib_root_window);
+  // TODO(Ryan): Have a max fps to prevent floating point going out.
+  r32 frame_dt = 1.0f / xrandr_active_crtc.refresh_rate;
 
   HHFInput hhf_cur_input = {}, hhf_prev_input = {};
   bool hhf_input_controller_buttons_bounds_check = \
@@ -956,6 +967,7 @@ main(int argc, char *argv[])
   // NOTE(Ryan): Mouse hardware only give relative events, so require Xlib to give us absolute
   hhf_cur_input.mouse_x = win_x;
   hhf_cur_input.mouse_y = win_y;
+  hhf_cur_input.frame_dt = frame_dt;
 
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
@@ -969,9 +981,6 @@ main(int argc, char *argv[])
   //udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
   //udev_monitor_enable_receiving(udev_mon);
 
-  XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
-                                                               xlib_root_window);
-  r32 frame_dt = 1.0f / xrandr_active_crtc.refresh_rate;
 
   int pulse_samples_per_second = 44100;
   int pulse_num_channels = 2;

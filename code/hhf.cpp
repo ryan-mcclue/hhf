@@ -9,6 +9,8 @@ struct HHFState
 
   int player_x;
   int player_y;
+
+  int tone_hz; 
 };
 
 INTERNAL void
@@ -32,11 +34,10 @@ render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
 }
 
 INTERNAL void
-output_sound(HHFSoundBuffer *sound_buffer)
+output_sound(HHFSoundBuffer *sound_buffer, HHFState *state)
 {
   int tone_volume = 3000;
-  int tone_hz = 256;
-  int tone_period = sound_buffer->samples_per_second / tone_hz;
+  int tone_period = sound_buffer->samples_per_second / state->tone_hz;
   LOCAL_PERSIST r32 tone_t = 0.0f;
 
   s16 *samples = sound_buffer->samples;
@@ -57,6 +58,14 @@ output_sound(HHFSoundBuffer *sound_buffer)
   }
 }
 
+// TODO(Ryan): Why are coordinates in floats? 
+// Allows sub-pixel positioning of sprites via interpolation?
+INTERNAL void
+draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 x2)
+{
+
+}
+
 extern "C" void
 hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
@@ -71,6 +80,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     state->y_offset = 0;
     state->player_x = 200;
     state->player_y = 200;
+    state->tone_hz = 256;
     memory->is_initialized = true;
   }
 
@@ -97,7 +107,8 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         if (controller.move_left.ended_down) state->player_x -= 2;
         if (controller.move_right.ended_down) state->player_x += 2;
 
-        // if (controller.move_up.ended_down) state->tone_hz += 2;
+        if (controller.right_shoulder.ended_down) state->tone_hz += 2;
+        if (controller.left_shoulder.ended_down) state->tone_hz -= 2;
       }
 
     }
@@ -114,6 +125,6 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     }
   }
 
-  output_sound(sound_buffer);
+  output_sound(sound_buffer, state);
 }
 

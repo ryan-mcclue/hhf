@@ -14,7 +14,7 @@ common_compiler_flags="-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextr
 dev_compiler_flags="-Og -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
 
 # IMPORTANT(Ryan): Xpresent is not present on fresh installs of Ubuntu.  
-# Work towards utilising GL
+# Work towards utilising GL (will also not have to do jit rendering)
 libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
 common_linker_flags="-Wl,--gc-sections $libraries"
 

@@ -143,6 +143,8 @@ struct HHFInputController
 #define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
+  r32 frame_dt;
+
   union
   {
     bool mouse_buttons[3];
@@ -153,12 +155,8 @@ struct HHFInput
       bool mouse_right;
     };
   };
-  s32 mouse_x, mouse_y, mouse_z; // z is wheel
-  // XWindowAttr attr = {};
-  // XGetWindowAttributes(display, window, &attr);
-  // attr.x, attr.y
+  int mouse_x, mouse_y, mouse_wheel;
 
-  // TODO(Ryan): Insert timing values here
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
