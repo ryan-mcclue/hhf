@@ -4,15 +4,11 @@
 
 struct HHFState
 {
-  int x_offset;
-  int y_offset;
-
   int player_x;
   int player_y;
-
-  int tone_hz; 
 };
 
+#if 0
 INTERNAL void
 render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
 {
@@ -57,6 +53,7 @@ output_sound(HHFSoundBuffer *sound_buffer, HHFState *state)
     }
   }
 }
+#endif
 
 // TODO(Ryan): Why are coordinates in floats? 
 // Allows sub-pixel positioning of sprites via interpolation?
@@ -106,13 +103,11 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   HHFState *state = (HHFState *)memory->permanent;
   if (!memory->is_initialized)
   {
-    state->x_offset = 0;
-    state->y_offset = 0;
     state->player_x = 200;
     state->player_y = 200;
-    state->tone_hz = 256;
     memory->is_initialized = true;
   }
+
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -129,26 +124,72 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       else
       {
         // digital tuning
-        if (controller.action_left.ended_down) state->x_offset -= 2;
-        if (controller.action_right.ended_down) state->x_offset += 2;
-        if (controller.action_up.ended_down) state->y_offset -= 2;
-        if (controller.action_down.ended_down) state->y_offset += 2;
+        r32 dplayer_x = 0.0f; 
+        r32 dplayer_y = 0.0f; 
 
-        if (controller.move_left.ended_down) state->player_x -= 2;
-        if (controller.move_right.ended_down) state->player_x += 2;
+        // TODO(Ryan): Negatives are going faster?
+        if (controller.action_left.ended_down) dplayer_x = -1.0f;
+        if (controller.action_right.ended_down) dplayer_x = 1.0f;
+        if (controller.action_up.ended_down) dplayer_y = -1.0f;
+        if (controller.action_down.ended_down) dplayer_y = 1.0f;
 
-        if (controller.right_shoulder.ended_down) state->tone_hz += 2;
-        if (controller.left_shoulder.ended_down) state->tone_hz -= 2;
+        dplayer_x *= 64.0f;
+        dplayer_y *= 64.0f;
+
+        state->player_x += (dplayer_x * input->frame_dt);
+        state->player_y += (dplayer_y * input->frame_dt);
       }
 
     }
   }
 
+  u32 tile_map[9][16] =
+  {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+  };
+
+  r32 tile_width = 75.0f;
+  r32 tile_height = 75.0f;
+
+  // NOTE(Ryan): Useful to have these to only show half of a tile, etc.
+  r32 upper_left_x = 0.0f;
+  r32 upper_left_y = 0.0f;
+
   draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
 
-  draw_rect(back_buffer, input->mouse_x, input->mouse_y, 
-            input->mouse_x + 10, input->mouse_y + 10, 0.3f, 0.2f, 1.0f);
+  for (int y = 0; y < 9; ++y)
+  {
+    for (int x = 0; x < 16; ++x)
+    {
+      u32 tile_id = tile_map[y][x];
+      r32 grayscale = 0.5f;
+      if (tile_id == 1) grayscale = 1.0f;
 
+      r32 min_x = upper_left_x + ((r32)x * tile_width);
+      r32 min_y = upper_left_y + ((r32)y * tile_height);
+      r32 max_x = min_x + tile_width;
+      r32 max_y = min_y + tile_height;
 
-  output_sound(sound_buffer, state);
+      draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
+    }
+  }
+
+  r32 player_r = 0.5f;
+  r32 player_g = 0.2f;
+  r32 player_b = 1.0f;
+  r32 player_width = 0.75f * tile_width;
+  r32 player_height = tile_height;
+
+  r32 player_min_x = state->player_x - (player_width * 0.5f);
+  r32 player_min_y = state->player_y - player_height;
+  draw_rect(back_buffer, player_min_x, player_min_y, player_min_x + player_width, 
+      player_min_y + player_height, player_r, player_g, player_b);
 }

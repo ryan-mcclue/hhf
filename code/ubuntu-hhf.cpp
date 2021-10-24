@@ -1190,6 +1190,7 @@ main(int argc, char *argv[])
       if (input_passed_to_hhf)
       {
         hhf_cur_input = {};
+        hhf_cur_input.frame_dt = hhf_prev_input.frame_dt;
         hhf_cur_input.mouse_x = hhf_prev_input.mouse_x; 
         hhf_cur_input.mouse_y = hhf_prev_input.mouse_y;
         for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; controller_i++)
