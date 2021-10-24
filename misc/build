@@ -25,7 +25,9 @@ common_linker_flags="-Wl,--gc-sections $libraries"
 # 4. request symbol: __asm__(".symver <symbol>,<symbol>@GLIBC_*");
 # https://gist.github.com/nicky-zs/7541169
 
-ubuntu_hhf_pid=$(pgrep --newest ubuntu-hhf)
+# NOTE(Ryan): Debugger persists PID on program close instead of debugger close.
+# Assume PID in question has CPU usage greater than 10
+ubuntu_hhf_pid=$(ps -ef | grep build/ubuntu-hhf | awk '$4 > 10 { print $2 }')
 test -z "$ubuntu_hhf_pid" && g++ $common_compiler_flags $dev_compiler_flags \
                            code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
                            $common_linker_flags
