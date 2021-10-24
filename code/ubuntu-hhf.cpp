@@ -2,8 +2,6 @@
 
 #include "hhf.h"
 
-// platform specific last as OS may #define crazy things that override us
-
 #include <x86intrin.h>
 
 #include <sys/mman.h>
@@ -28,6 +26,7 @@
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
+#define _NET_WM_STATE_TOGGLE (2)
 
 #include <libudev.h>
 enum UDEV_DEVICE_TYPE
@@ -57,6 +56,14 @@ struct UdevPollDevice
 
 GLOBAL bool want_to_run = true;
 
+struct XlibInfo 
+{
+  Display *display;
+  Window root, window;
+  int window_width, window_height;
+  Atom state, maxh, maxv, fullscreen;
+};
+
 INTERNAL void
 udev_possibly_add_device(int epoll_fd, struct udev_device *device, 
                          UdevPollDevice poll_devices[MAX_PROCESS_FDS],
@@ -66,13 +73,12 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
 
   UDEV_DEVICE_TYPE dev_type = UDEV_DEVICE_TYPE_IGNORE;
 
-  char *dev_prop = \
-    (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
+  char *dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_KEYBOARD");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_KEYBOARD;
 
   // device_property_val = udev_device_get_property_value(device, "ID_INPUT_TOUCHPAD");
-  //dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
-  //if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
+  dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_MOUSE");
+  if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_MOUSE;
 
   dev_prop = (char *)udev_device_get_property_value(device, "ID_INPUT_JOYSTICK");
   if (dev_prop != NULL && strcmp(dev_prop, "1") == 0) dev_type = UDEV_DEVICE_TYPE_GAMEPAD;
@@ -90,16 +96,19 @@ udev_possibly_add_device(int epoll_fd, struct udev_device *device,
       event.data.fd = dev_fd;
       epoll_ctl(epoll_fd, EPOLL_CTL_ADD, dev_fd, &event);
 
-      UdevPollDevice *dev = &poll_devices[dev_fd];
-      dev->type = dev_type;
-
-      ASSERT(hhf_i < HHF_INPUT_MAX_NUM_CONTROLLERS);
-      input->controllers[hhf_i].is_connected = true;
-      if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
+      if (dev_type != UDEV_DEVICE_TYPE_MOUSE)
       {
-        input->controllers[hhf_i].is_analog = true;
+        UdevPollDevice *dev = &poll_devices[dev_fd];
+        dev->type = dev_type;
+
+        ASSERT(hhf_i < HHF_INPUT_MAX_NUM_CONTROLLERS);
+        input->controllers[hhf_i].is_connected = true;
+        if (dev->type == UDEV_DEVICE_TYPE_GAMEPAD) 
+        {
+          input->controllers[hhf_i].is_analog = true;
+        }
+        dev->hhf_i = hhf_i++;
       }
-      dev->hhf_i = hhf_i++;
 
       //strncpy(hotplug_devices[hotplug_device_cursor].dev_path, dev_path, 64);
       // TODO(Ryan): Removing a device won't reset this so continuosly adding and
@@ -228,6 +237,7 @@ xlib_back_buffer_update_render_pict(Display *display, XlibBackBuffer *back_buffe
                          back_buffer->render_pict.fmt, 0, 
                          &back_buffer->render_pict.attr);
 
+  // TODO(Ryan): Implement scaling ourselves
   double x_scale = back_buffer->width / (double)window_width;
   double y_scale = back_buffer->height / (double)window_height;
   back_buffer->render_pict.transform_matrix = {{
@@ -453,7 +463,8 @@ udev_process_analog_button(HHFInputButtonState *prev_button_state_neg,
 
 INTERNAL void
 udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
-                        HHFInput *prev_input, HHFInput *cur_input)
+                        HHFInput *prev_input, HHFInput *cur_input,
+                        XlibInfo *info)
 {
   struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
   int num_epoll_events = epoll_wait(epoll_fd, epoll_events, EPOLL_UDEV_MAX_EVENTS, 0);
@@ -473,10 +484,10 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       u16 dev_event_code = dev_events[dev_event_i].code;
       s32 dev_event_value = dev_events[dev_event_i].value;
 
-      if (dev_event_type == EV_KEY)
-      {
-         printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
-      }
+      //if (dev_event_type == EV_KEY)
+      //{
+      //   printf("type: %" PRIu16 " code: %" PRIu16 ", value: %" PRId32"\n", dev_event_type, dev_event_code, dev_event_value);
+      //}
       
       if (dev_event_type == EV_SYN) continue;
 
@@ -485,11 +496,45 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       bool was_down = (dev_event_type == EV_KEY ? dev_event_value == 2 : false);
       bool is_down = (first_down || was_down);
 
+      if (dev_event_code == BTN_LEFT) cur_input->mouse_left = is_down;
+      if (dev_event_code == BTN_RIGHT) cur_input->mouse_right = is_down;
+      if (dev_event_code == BTN_MIDDLE) cur_input->mouse_middle = is_down;
+      if (dev_event_code == REL_X) 
+      {
+        if (cur_input->mouse_x + dev_event_value < 0)
+        {
+          cur_input->mouse_x = 0;
+        }
+        else if (cur_input->mouse_x + dev_event_value > info->window_width)
+        {
+          cur_input->mouse_x = info->window_width;
+        }
+        else
+        {
+          cur_input->mouse_x += dev_event_value;
+        }
+      }
+      if (dev_event_code == REL_Y) 
+      {
+        if (cur_input->mouse_y + dev_event_value < 0)
+        {
+          cur_input->mouse_y = 0;
+        }
+        else if (cur_input->mouse_y + dev_event_value > info->window_height)
+        {
+          cur_input->mouse_y = info->window_height;
+        }
+        else
+        {
+          cur_input->mouse_y += dev_event_value;
+        }
+      }
+      if (dev_event_code == REL_WHEEL) cur_input->mouse_wheel += dev_event_value;
+
       HHFInputController *cur_controller_state = &cur_input->controllers[dev.hhf_i];
       HHFInputController *prev_controller_state = &prev_input->controllers[dev.hhf_i];
 
       // TODO(Ryan): Gamepad cannot vibrate
-      // TODO(Ryan): Multiple keyboards results in lag
       if (dev_event_code == BTN_DPAD_LEFT || dev_event_code == KEY_A)
       {
         udev_process_digital_button(&prev_controller_state->move_left, 
@@ -586,21 +631,65 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
                                     &cur_controller_state->start, is_down);
       }
 #if defined(HHF_INTERNAL)
+      if (dev_event_code == KEY_F10 && first_down)
+      {
+        XClientMessageEvent maximise_ev = {};
+        maximise_ev.type = ClientMessage;
+        maximise_ev.format = 32;
+        maximise_ev.window = info->window;
+        maximise_ev.message_type = info->state;
+        maximise_ev.data.l[0] = _NET_WM_STATE_TOGGLE; 
+        maximise_ev.data.l[1] = info->maxh;
+        maximise_ev.data.l[2] = info->maxv;
+        maximise_ev.data.l[3] = 1;
+        
+        XSendEvent(info->display, info->root, False, 
+                   SubstructureNotifyMask, (XEvent *)&maximise_ev);
+      }
+      if (dev_event_code == KEY_F11 && first_down)
+      {
+        XClientMessageEvent maximise_ev = {};
+        maximise_ev.type = ClientMessage;
+        maximise_ev.format = 32;
+        maximise_ev.window = info->window;
+        maximise_ev.message_type = info->state;
+        maximise_ev.data.l[0] = _NET_WM_STATE_TOGGLE; 
+        maximise_ev.data.l[1] = info->fullscreen;
+        maximise_ev.data.l[3] = 1;
+        
+        XSendEvent(info->display, info->root, False, 
+                   SubstructureNotifyMask, (XEvent *)&maximise_ev);
+      }
       if (dev_event_code == KEY_F12) want_to_run = false;
+
+  
+      //if (dev_event_code == KEY_R)
+      //{
+      //  if (!are_recording_input)
+      //  {
+      //    are_recording_input = true;
+      //    are_playing_input = false;
+      //  }
+      //  else
+      //  {
+      //    are_recording_input = false;
+      //    are_playing_input = true;
+      //  }
+      //}
 #endif
     }
   }
 }
 
 void
-hhf_platform_free_read_file_result(HHFPlatformReadFileResult *file_result)
+hhf_platform_free_read_file_result(HHFThreadContext *thread_context, HHFPlatformReadFileResult *file_result)
 {
   free(file_result->contents);
 }
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
+hhf_platform_write_entire_file(HHFThreadContext *thread_context, char *file_name, void *memory, size_t size)
 {
   int result = 0;
 
@@ -608,7 +697,7 @@ hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
   u8 *byte_location = NULL;
   int file_fd = 0;
 
-  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC); 
+  int open_res = open(file_name, O_CREAT | O_WRONLY | O_TRUNC, 0777); 
   if (open_res < 0) 
   {
     EBP(NULL);
@@ -635,8 +724,6 @@ hhf_platform_write_entire_file(char *file_name, void *memory, size_t size)
       byte_location += bytes_written;
     }
   }
-  // IMPORTANT(Ryan): Allow other programs to use the files created inside the debugger
-  fchmod(file_fd, S_IROTH | S_IWOTH);
 end_open:
   close(file_fd); 
 end:
@@ -647,7 +734,7 @@ end:
 // Avoid round tripping by writing to a queue
 // Introduce streaming, i.e background loading
 HHFPlatformReadFileResult
-hhf_platform_read_entire_file(char *file_name)
+hhf_platform_read_entire_file(HHFThreadContext *thread_context, char *file_name)
 {
   HHFPlatformReadFileResult result = {0};
 
@@ -714,9 +801,8 @@ copy_file(char *src_file, char *dst_file)
   int src_fd = open(src_file, O_RDONLY);
   if (src_fd == -1) EBP(NULL);
 
-  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC);
+  int dst_fd = open(dst_file, O_CREAT | O_WRONLY | O_TRUNC, 0777);
   if (dst_fd == -1) EBP(NULL);
-  if (fchmod(dst_fd, 0777) == -1) EBP(NULL);
 
   struct stat src_file_stat = {};
   if (fstat(src_fd, &src_file_stat) == -1) EBP(NULL);
@@ -728,15 +814,47 @@ copy_file(char *src_file, char *dst_file)
   close(dst_fd);
 }
 
-GLOBAL volatile bool want_to_reload_update_and_render = true;
+//INTERNAL void
+//begin_recording_input(void)
+//{
+//  int input_recording_handle = open();
+//  // Modern systems have first-party DMA (bus mastering, i.e. devices directly with RAM)
+//  // as oppose to third-party DMA (DMA controller on southbridge of motherboard)
+//  // DMA controller not useful, largely pointless as source of sta
+//  // create memory mapped file with HHFMemory initially written to it.
+//  // use a separate file for input
+//  write(memory);
+//}
+
+//INTERNAL void
+//end_recording_input(void)
+//{
+//  close(input_recording_handle);
+//}
+//
+//INTERNAL void
+//playback_input(void)
+//{
+//  read(handle, new_input, sizeof(*new_input));
+//  if (end_of_file)
+//  {
+//    // or just seek?
+//    end_recording_input();
+//    begin_playing_input();
+//  }
+//}
+
+// NOTE(Ryan): Not actually atomic, just ensuring that read and write in one go.
+// e.g. long long might require several instructions with lower and upper bits
+GLOBAL volatile sig_atomic_t want_to_reload_update_and_render = 1;
 
 void
 signal_reload_update_and_render(int sig_num)
 {
-  want_to_reload_update_and_render = true;
+  want_to_reload_update_and_render = 1;
 }
 
-typedef void (*hhf_update_and_render_t)(HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
+typedef void (*hhf_update_and_render_t)(HHFThreadContext *, HHFBackBuffer *, HHFSoundBuffer *, HHFInput *, HHFMemory *, HHFPlatform *); 
 
 int
 main(int argc, char *argv[])
@@ -775,6 +893,10 @@ main(int argc, char *argv[])
       xlib_visual_info.visual, attribute_mask, &xlib_window_attr);
 
   XStoreName(xlib_display, xlib_window, "HHF");
+  XClassHint xlib_class_hint = {};
+  xlib_class_hint.res_name = "HHF";
+  xlib_class_hint.res_class = "Game";
+  XSetClassHint(xlib_display, xlib_window, &xlib_class_hint);
 
   int xpresent_op = 0, event = 0, error = 0;
   XPresentQueryExtension(xlib_display, &xpresent_op, &event, &error);
@@ -783,14 +905,38 @@ main(int argc, char *argv[])
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
+  Atom xlib_netwm_state_atom = XInternAtom(xlib_display, "_NET_WM_STATE", False);
+  Atom xlib_netwm_state_maxh_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
+  Atom xlib_netwm_state_maxv_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_VERT", False);
+  Atom xlib_netwm_state_fullscreen_atom = \
+    XInternAtom(xlib_display, "_NET_WM_STATE_FULLSCREEN", False);
+  if (xlib_netwm_state_atom == None || xlib_netwm_state_maxv_atom == None || 
+      xlib_netwm_state_maxh_atom == None || xlib_netwm_state_fullscreen_atom == None) BP(NULL);
+
+  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
+  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
+
+  XlibInfo xlib_info = {};
+  xlib_info.window_width = xlib_window_width;
+  xlib_info.window_height = xlib_window_height;
+  xlib_info.display = xlib_display;
+  xlib_info.root = xlib_root_window;
+  xlib_info.window = xlib_window;
+  xlib_info.state = xlib_netwm_state_atom;
+  xlib_info.maxh = xlib_netwm_state_maxh_atom;
+  xlib_info.maxv = xlib_netwm_state_maxv_atom;
+  xlib_info.fullscreen = xlib_netwm_state_fullscreen_atom;
+
   GC xlib_gc = XDefaultGC(xlib_display, xlib_screen);
 
   Atom xlib_wm_delete_atom = XInternAtom(xlib_display, "WM_DELETE_WINDOW", False);
   if (xlib_wm_delete_atom == None) BP(NULL);
   if (XSetWMProtocols(xlib_display, xlib_window, &xlib_wm_delete_atom, 1) == False) BP(NULL);
 
-  int xlib_window_width = xlib_window_x1 - xlib_window_x0;
-  int xlib_window_height = xlib_window_y1 - xlib_window_y0;
+  // TODO(Ryan): For shipping, want 1920 x 1080 x 60Hz
+  // For software, 1/8 so 960 x 540 x 30Hz
   int xlib_back_buffer_width = 1280;
   int xlib_back_buffer_height = 720;
   XlibBackBuffer xlib_back_buffer = \
@@ -802,11 +948,26 @@ main(int argc, char *argv[])
   hhf_back_buffer.height = xlib_back_buffer.height;
   hhf_back_buffer.memory = xlib_back_buffer.memory;
 
+  XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
+                                                               xlib_root_window);
+  // TODO(Ryan): Have a max fps to prevent floating point going out.
+  r32 frame_dt = 1.0f / xrandr_active_crtc.refresh_rate;
+
   HHFInput hhf_cur_input = {}, hhf_prev_input = {};
   bool hhf_input_controller_buttons_bounds_check = \
     &hhf_cur_input.controllers[0].__TERMINATOR__ - &hhf_cur_input.controllers[0].buttons[0] == 
       ARRAY_LEN(hhf_cur_input.controllers[0].buttons);
   ASSERT(hhf_input_controller_buttons_bounds_check);
+
+  Window root_win = 0, child_win = 0;
+  int root_x = 0, root_y = 0, win_x = 0, win_y = 0;
+  unsigned int mask = 0;
+  XQueryPointer(xlib_display, xlib_window, &root_win, &child_win,
+                &root_x, &root_y, &win_x, &win_y, &mask);
+  // NOTE(Ryan): Mouse hardware only give relative events, so require Xlib to give us absolute
+  hhf_cur_input.mouse_x = win_x;
+  hhf_cur_input.mouse_y = win_y;
+  hhf_cur_input.frame_dt = frame_dt;
 
   struct udev *udev_obj = udev_new();
   if (udev_obj == NULL) BP(NULL);
@@ -820,9 +981,6 @@ main(int argc, char *argv[])
   //udev_monitor_filter_add_match_subsystem_devtype(udev_mon, "input", NULL);
   //udev_monitor_enable_receiving(udev_mon);
 
-  XrandrActiveCRTC xrandr_active_crtc = xrandr_get_active_crtc(xlib_display, 
-                                                               xlib_root_window);
-  r32 frame_dt = 1.0f / xrandr_active_crtc.refresh_rate;
 
   int pulse_samples_per_second = 44100;
   int pulse_num_channels = 2;
@@ -838,7 +996,7 @@ main(int argc, char *argv[])
                                           &pulse_error_code);
   if (pulse_player == NULL) BP(pa_strerror(pulse_error_code));
 
-  // TODO(Ryan): Handle audio skips when exceeding frame rate
+  // TODO(Ryan): Handle audio skips when exceeding frame rate (utilise past frame time)
   int pulse_buffer_num_base_samples = pulse_samples_per_second * frame_dt; 
   int pulse_buffer_num_samples =  pulse_buffer_num_base_samples * pulse_num_channels;
   s16 *pulse_buffer = (s16 *)calloc(pulse_buffer_num_samples, sizeof(s16));
@@ -859,8 +1017,15 @@ main(int argc, char *argv[])
 #else
   void *hhf_memory_raw_base_addr = NULL;
 #endif
+  // NOTE(Ryan): Virtual memory is prevalent. As the lookup is not free, most CPUs have a
+  // MMU (MMU contains translation lookaside buffer which is a cache of mappings)
+  // So, by enabling large page size, we can alleviate the TLB
+  // However, large page size must be enabled via a kernel boot param (so leave for now)
+  // This can be acheived with boot-repair under grub options
   void *hhf_memory_raw = mmap(hhf_memory_raw_base_addr, hhf_memory_raw_size, 
-                              PROT_READ | PROT_WRITE, MAP_ANONYMOUS | MAP_PRIVATE, -1, 0);
+                              PROT_READ | PROT_WRITE, 
+                              MAP_ANONYMOUS | MAP_PRIVATE, 
+                              -1, 0);
   if (hhf_memory_raw == MAP_FAILED) EBP(NULL);
 
   memset(hhf_memory_raw, 0x00, hhf_memory_raw_size);
@@ -870,15 +1035,18 @@ main(int argc, char *argv[])
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
   hhf_memory.permanent_size = hhf_transient_size;
 
+  HHFThreadContext hhf_thread_context = {};
+
   HHFPlatform hhf_platform = {};
   hhf_platform.read_entire_file = hhf_platform_read_entire_file;
   hhf_platform.free_read_file_result = hhf_platform_free_read_file_result;
   hhf_platform.write_entire_file = hhf_platform_write_entire_file;
 
-  xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
-                               xrandr_active_crtc.crtc, &xlib_back_buffer, 
-                               xlib_window_width, xlib_window_height);
+  // TODO(Ryan): Replace breakpoints with proper NULL and error handling
 
+  // TODO(Ryan): write() prevents sparseness
+
+  // TODO(Ryan): Use PATH_MAX from <linux/limits.h>?
   char hhf_location[128] = {};
   readlink("/proc/self/exe", hhf_location, sizeof(hhf_location));
   char *last_slash = NULL;
@@ -895,16 +1063,26 @@ main(int argc, char *argv[])
 
   // IMPORTANT(Ryan): Signals utilised as it seems that the modification time of a file is
   // changed before writing has completed. 
-  signal(SIGUSR1, signal_reload_update_and_render);
+  struct sigaction signal_reload_act = {};
+  signal_reload_act.sa_handler = signal_reload_update_and_render;
+  if (sigaction(SIGUSR1, &signal_reload_act, NULL) == -1) EBP(NULL);
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
+
+  // only hide on fullscreen
+  // XFixesHideCursor(xlib_display, xlib_root_window);
+
+  xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
+                               xrandr_active_crtc.crtc, &xlib_back_buffer, 
+                               xlib_window_width, xlib_window_height);
+
 
   u64 prev_cycle_count = __rdtsc();
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
+  int input_recording_index = 0, input_playing_index = 0;
   bool input_passed_to_hhf = false;
-  int x_offset = 0, y_offset = 0;
   while (want_to_run)
   {
     XEvent xlib_event = {};
@@ -914,8 +1092,9 @@ main(int argc, char *argv[])
 
       if (xlib_event.type == ConfigureNotify)
       {
-          xlib_window_width = xlib_event.xconfigure.width;
-          xlib_window_height = xlib_event.xconfigure.height;
+          xlib_info.window_width = xlib_event.xconfigure.width;
+          xlib_info.window_height = xlib_event.xconfigure.height;
+          //printf("x: %d, y: %d\n", xlib_event.xconfigure.x, xlib_event.xconfigure.y);
       }
 
       if (xlib_event.xclient.data.l[0] == (long)(xlib_wm_delete_atom))
@@ -932,7 +1111,8 @@ main(int argc, char *argv[])
       XGetInputFocus(xlib_display, &xlib_focused_window, &xlib_focused_window_state);
       if (xlib_focused_window == xlib_window)
       {
-        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, &hhf_cur_input);
+        udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
+                                &hhf_cur_input, &xlib_info);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -952,13 +1132,24 @@ main(int argc, char *argv[])
               if (update_and_render_lib == NULL) EBP(NULL);
               update_and_render = (hhf_update_and_render_t)dlsym(update_and_render_lib, "hhf_update_and_render");
               if (update_and_render == NULL) EBP(dlerror());
-              want_to_reload_update_and_render = false;
+              want_to_reload_update_and_render = 0;
             }
+            
+            //if (are_recording_input)
+            //{
+            //  record_state(&hhf_memory, &hhf_cur_input);
+            //}
+            //if (are_playing_input)
+            //{
+            //  wrap in struct to preserve original input and memory
+            //  playback_state(&hhf_memory, &hhf_cur_input);
+            //}
 
-            update_and_render(&hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
+            update_and_render(&hhf_thread_context, &hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
                               &hhf_memory, &hhf_platform);
             input_passed_to_hhf = true;
 
+            // TODO(Ryan): Add however long last frame took to audio minimum size
             if (pa_simple_write(pulse_player, pulse_buffer, sizeof(s16) * 2 * pulse_buffer_num_base_samples, 
                                 &pulse_error_code) < 0) BP(pa_strerror(pulse_error_code));
 
@@ -977,13 +1168,13 @@ main(int argc, char *argv[])
 
             xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                          xrandr_active_crtc.crtc, &xlib_back_buffer,
-                                         xlib_window_width, xlib_window_height);
-
+                                         xlib_info.window_width, xlib_info.window_height);
+            
             u64 end_cycle_count = __rdtsc();
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
             r32 ms_per_frame = timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f;
-            printf("ms per frame: %.02f\n", ms_per_frame); 
+            //printf("ms per frame: %.02f\n", ms_per_frame); 
             //printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
 
             prev_timespec = end_timespec;
@@ -994,10 +1185,13 @@ main(int argc, char *argv[])
       }
 
       // NOTE(Ryan): Preserve transition count if not passed to hhf
+      // TODO(Ryan): For speed just exchange pointers
       hhf_prev_input = hhf_cur_input;
       if (input_passed_to_hhf)
       {
         hhf_cur_input = {};
+        hhf_cur_input.mouse_x = hhf_prev_input.mouse_x; 
+        hhf_cur_input.mouse_y = hhf_prev_input.mouse_y;
         for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; controller_i++)
         {
           HHFInputController *cur_controller = &hhf_cur_input.controllers[controller_i];

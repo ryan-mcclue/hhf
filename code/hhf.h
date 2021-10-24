@@ -16,6 +16,8 @@
 #define LOCAL_PERSIST static
 #define BILLION 1000000000L
 
+#define CLEAR_ASCII_ESCAPE "\033[1;1H\033[2K"
+
 typedef unsigned int uint;
 
 typedef uint8_t u8;
@@ -73,6 +75,11 @@ safe_truncate_u64(u64 val)
   return (u32)val;
 }
 
+// NOTE(Ryan): This is pre-emption to make it easier to identify what thread we are in
+struct HHFThreadContext
+{
+  int placeholder;
+};
 
 struct HHFBackBuffer
 {
@@ -136,7 +143,20 @@ struct HHFInputController
 #define HHF_INPUT_MAX_NUM_CONTROLLERS 8
 struct HHFInput
 {
-  // TODO(Ryan): Insert timing values here
+  r32 frame_dt;
+
+  union
+  {
+    bool mouse_buttons[3];
+    __extension__ struct
+    {
+      bool mouse_left;
+      bool mouse_middle;
+      bool mouse_right;
+    };
+  };
+  int mouse_x, mouse_y, mouse_wheel;
+
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
 };
 
@@ -161,18 +181,12 @@ struct HHFPlatformReadFileResult
 
 struct HHFPlatform
 {
-  HHFPlatformReadFileResult (*read_entire_file)(char *file_name);
-  void (*free_read_file_result)(HHFPlatformReadFileResult *read_result);
-  int (*write_entire_file)(char *filename, void *memory, size_t size);
+  HHFPlatformReadFileResult (*read_entire_file)(HHFThreadContext *thread, char *file_name);
+  void (*free_read_file_result)(HHFThreadContext *thread, HHFPlatformReadFileResult *read_result);
+  int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, size_t size);
 };
 
-void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer,
-                      HHFInput *input, HHFMemory *memory, HHFPlatform *platform);
-
-// TODO(Ryan): The platform layer does not need to know about this
-struct HHFState
-{
-  int x_offset;
-  int y_offset;
-};
+extern "C" void
+hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
+                      HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
+                      HHFPlatform *platform);

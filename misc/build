@@ -3,47 +3,49 @@
 
 test ! -d build && mkdir build
 
-intel_vtune="$HOME/intel/oneapi/vtune/2021.6.0/sdk"
-intel_vtune_flags="-I ${intel_vtune}/include -L ${intel_vtune}/lib64"
-
-common_flags='-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedantic 
-  -Warray-bounds=2 -march=native'
-
-# TODO(Ryan): Build for arm and test with qemu? 
-
-# TODO(Ryan): Use virt-manager for other distributions.
-# Base other distribution on steam hardware survey?
-
-# TODO(Ryan): For kernel, compile with oldest LTS?
-# Libc is forwards-compatible, compile with oldest libc determined with objdump. 
-# Although statically linking with musl-libc possible, may cause issues for dependencies  
-
-# TODO(Ryan): Separate into compiler and linker flags
-
-# Add thread-sanitizer later. Is address-sanitizer worth it?
+# NOTE(Ryan): -fsanitize=thread, -fsanitize=address 
 ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
-  -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings'
+  -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings
+  -Wno-unused-result'
+common_compiler_flags="-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedantic 
+  -Warray-bounds=2 -march=native -ffunction-sections -fdata-sections $ignored_warnings"
 
-# TODO(Ryan): -O0 still removes unused variables?
-# -Og gives error on open() ...
-dev_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL $ignored_warnings"
 # TODO(Ryan): memfault Usefulness of linker map files (analyse program size?)
+dev_compiler_flags="-Og -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
 
-#"-ffunction-sections -fdata-sections"
-# linker_dev_flags="--gc-sections"
-
-# IMPORTANT(Ryan): gcc extension to allow VLA.
-# Without, have to use alloca()
-
+# IMPORTANT(Ryan): Xpresent is not present on fresh installs of Ubuntu.  
+# Work towards utilising GL (will also not have to do jit rendering)
 libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
+common_linker_flags="-Wl,--gc-sections $libraries"
 
-# TODO(Ryan): Handle different threads
-ubuntu_hhf_pid=$(pgrep ubuntu-hhf)
-test -z "$ubuntu_hhf_pid" && g++ $common_flags $dev_flags \
+# IMPORTANT(Ryan): glibc forwards-compatibility creates headaches
+# 1. glibc versions referenced: $(objdump -p prog)
+# 2. symbols referencing glibc version: $(objdump -T prog | grep GLIBC_*)
+# 3. older symbols: $(objdump -T /lib/libc.so.6 | grep <symbol>)
+# 4. request symbol: __asm__(".symver <symbol>,<symbol>@GLIBC_*");
+# https://gist.github.com/nicky-zs/7541169
+
+# NOTE(Ryan): Debugger persists PID on program close instead of debugger close.
+# Assume PID in question has CPU usage greater than 10
+ubuntu_hhf_pid=$(ps -ef | grep build/ubuntu-hhf | awk '$4 > 10 { print $2 }')
+test -z "$ubuntu_hhf_pid" && g++ $common_compiler_flags $dev_compiler_flags \
                            code/ubuntu-hhf.cpp -o build/ubuntu-hhf \
-                           $libraries
+                           $common_linker_flags
 
-g++ $common_flags $dev_flags \
+g++ $common_compiler_flags $dev_compiler_flags \
   -fPIC code/hhf.cpp -shared -o build/hhf.so
 # NOTE(Ryan): 10 == SIGUSR1
 test -n "$ubuntu_hhf_pid" && kill -10 $ubuntu_hhf_pid
+
+# TODO(Ryan): Place .gdbinit inside build/ folder.
+# Our working directory should be data/ as this where files will be zipped for distribution
+
+# TODO(Ryan): Sysinfo script, e.g. ram, cpu, stack, wm, desktop environment, kernel,
+# display, solid state, etc. (htop good for memory usage)
+# Look at processor spec sheet for max memory bandwidth (cache bandwidth should be much higher)
+# dmidecode useful also
+
+# TODO(Ryan): Identify features to look for/implement when in 'shipping' mode, e.g.
+# Code Assurance: static analysis (for security bugs/industry standards),
+# dynamic verification (testing and code coverage), etc.
+# Optimisation

@@ -2,6 +2,17 @@
 
 #include "hhf.h"
 
+struct HHFState
+{
+  int x_offset;
+  int y_offset;
+
+  int player_x;
+  int player_y;
+
+  int tone_hz; 
+};
+
 INTERNAL void
 render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
 {
@@ -23,11 +34,10 @@ render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
 }
 
 INTERNAL void
-output_sound(HHFSoundBuffer *sound_buffer)
+output_sound(HHFSoundBuffer *sound_buffer, HHFState *state)
 {
   int tone_volume = 3000;
-  int tone_hz = 256;
-  int tone_period = sound_buffer->samples_per_second / tone_hz;
+  int tone_period = sound_buffer->samples_per_second / state->tone_hz;
   LOCAL_PERSIST r32 tone_t = 0.0f;
 
   s16 *samples = sound_buffer->samples;
@@ -48,8 +58,48 @@ output_sound(HHFSoundBuffer *sound_buffer)
   }
 }
 
+// TODO(Ryan): Why are coordinates in floats? 
+// Allows sub-pixel positioning of sprites via interpolation?
+// What is sub-pixel? It makes movement smoother
+// NOTE(Ryan): We use floats for speed, ease in operations (blending), flexibility (normalisation)
+INTERNAL void
+draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32 g, r32 b)
+{
+  // NOTE(Ryan): Coordinates [x0, x1)
+  int min_x = roundf(x0); // _mm_cvtss_si32(_mm_set_ss(x0));
+  int min_y = roundf(y0);
+  int max_x = roundf(x1);
+  int max_y = roundf(y1);
+
+  if (min_x < 0) min_x = 0;
+  if (min_x >= back_buffer->width) min_x = back_buffer->width;
+  if (max_x < 0) max_x = 0;
+  if (max_x >= back_buffer->width) max_x = back_buffer->width;
+
+  if (min_y < 0) min_y = 0;
+  if (min_y >= back_buffer->height) min_y = back_buffer->height;
+  if (max_y < 0) max_y = 0;
+  if (max_y >= back_buffer->height) max_y = back_buffer->height;
+
+  u32 colour = (u32)roundf(r * 255.0f) << 16 | 
+               (u32)roundf(g * 255.0f) << 8 | 
+               (u32)roundf(b * 255.0f);
+
+  for (int y = min_y; y < max_y; ++y)
+  {
+    for (int x = min_x; x < max_x; ++x)
+    {
+      u32 *pixel = (u32 *)back_buffer->memory + x + (y * back_buffer->width);
+      *pixel = colour;
+    }
+  }
+
+}
+
 extern "C" void
-hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory)
+hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
+                      HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
+                      HHFPlatform *platform)
 {
   ASSERT(sizeof(HHFState) <= memory->permanent_size);
 
@@ -58,6 +108,9 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
   {
     state->x_offset = 0;
     state->y_offset = 0;
+    state->player_x = 200;
+    state->player_y = 200;
+    state->tone_hz = 256;
     memory->is_initialized = true;
   }
 
@@ -65,24 +118,37 @@ hhf_update_and_render(HHFBackBuffer *back_buffer, HHFSoundBuffer *sound_buffer, 
   // whether the user 'dashed'
   for (int controller_i = 0; controller_i < HHF_INPUT_MAX_NUM_CONTROLLERS; ++controller_i)
   {
+    // printf("mouse x: %d, mouse y: %d, mouse z: %d\n", input->mouse_x, input->mouse_y, input->mouse_z);
     HHFInputController controller = input->controllers[controller_i];
     if (controller.is_connected)
     {
-      // digital tuning
-      if (controller.action_left.ended_down) state->x_offset -= 2;
-      if (controller.action_right.ended_down) state->x_offset += 2;
-      if (controller.action_up.ended_down) state->y_offset -= 2;
-      if (controller.action_down.ended_down) state->y_offset += 2;
-
       // analog override
       if (controller.is_analog)
       {
       }
+      else
+      {
+        // digital tuning
+        if (controller.action_left.ended_down) state->x_offset -= 2;
+        if (controller.action_right.ended_down) state->x_offset += 2;
+        if (controller.action_up.ended_down) state->y_offset -= 2;
+        if (controller.action_down.ended_down) state->y_offset += 2;
+
+        if (controller.move_left.ended_down) state->player_x -= 2;
+        if (controller.move_right.ended_down) state->player_x += 2;
+
+        if (controller.right_shoulder.ended_down) state->tone_hz += 2;
+        if (controller.left_shoulder.ended_down) state->tone_hz -= 2;
+      }
+
     }
   }
 
-  render_weird_gradient(back_buffer, state->x_offset, state->y_offset);
+  draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
 
-  output_sound(sound_buffer);
+  draw_rect(back_buffer, input->mouse_x, input->mouse_y, 
+            input->mouse_x + 10, input->mouse_y + 10, 0.3f, 0.2f, 1.0f);
+
+
+  output_sound(sound_buffer, state);
 }
-
