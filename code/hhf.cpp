@@ -61,8 +61,32 @@ output_sound(HHFSoundBuffer *sound_buffer, HHFState *state)
 // TODO(Ryan): Why are coordinates in floats? 
 // Allows sub-pixel positioning of sprites via interpolation?
 INTERNAL void
-draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 x2)
+draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32 g, r32 b)
 {
+  // NOTE(Ryan): Coordinates [x0, x1)
+  int min_x = roundf(x0);
+  int min_y = roundf(y0);
+  int max_x = roundf(x1);
+  int max_y = roundf(y1);
+
+  if (min_x < 0) min_x = 0;
+  if (min_x >= back_buffer->width) min_x = back_buffer->width;
+  if (max_x < 0) max_x = 0;
+  if (max_x >= back_buffer->width) max_x = back_buffer->width;
+
+  if (min_y < 0) min_y = 0;
+  if (min_y >= back_buffer->height) min_y = back_buffer->height;
+  if (may_y < 0) may_y = 0;
+  if (may_y >= back_buffer->height) may_y = back_buffer->height;
+
+  for (int y = min_y; y < max_y; ++y)
+  {
+    for (int x = min_x; x < max_x; ++x)
+    {
+      u32 *pixel = (u32 *)back_buffer->memory + x + (y * back_buffer->width);
+      *pixel = 0xffffffff;
+    }
+  }
 
 }
 
@@ -116,14 +140,6 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
 
   render_weird_gradient(back_buffer, state->x_offset, state->y_offset);
 
-  for (int y = state->player_y; y < state->player_y + 10; ++y)
-  {
-    for (int x = state->player_x; x < state->player_x + 10; ++x)
-    {
-      u32 *pixel = (u32 *)back_buffer->memory + x + (y * back_buffer->width);
-      *pixel++ = 0xffffffff;
-    }
-  }
 
   output_sound(sound_buffer, state);
 }
