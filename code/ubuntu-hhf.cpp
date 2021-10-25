@@ -238,6 +238,7 @@ xlib_back_buffer_update_render_pict(Display *display, XlibBackBuffer *back_buffe
                          &back_buffer->render_pict.attr);
 
   // TODO(Ryan): Implement scaling ourselves
+  // NOTE(Ryan): Could offset game display here
   double x_scale = back_buffer->width / (double)window_width;
   double y_scale = back_buffer->height / (double)window_height;
   back_buffer->render_pict.transform_matrix = {{

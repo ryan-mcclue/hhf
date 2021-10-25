@@ -75,6 +75,12 @@ safe_truncate_u64(u64 val)
   return (u32)val;
 }
 
+inline int
+truncate_r32_to_int(r32 val)
+{
+  return (int)val;
+}
+
 // NOTE(Ryan): This is pre-emption to make it easier to identify what thread we are in
 struct HHFThreadContext
 {

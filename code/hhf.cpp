@@ -4,8 +4,8 @@
 
 struct HHFState
 {
-  int player_x;
-  int player_y;
+  r32 player_x;
+  r32 player_y;
 };
 
 #if 0
@@ -103,11 +103,32 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   HHFState *state = (HHFState *)memory->permanent;
   if (!memory->is_initialized)
   {
-    state->player_x = 200;
-    state->player_y = 200;
+    state->player_x = 100;
+    state->player_y = 100;
     memory->is_initialized = true;
   }
 
+#define TILE_MAP_NUM_TILES_X 16
+#define TILE_MAP_NUM_TILES_Y 9
+  u32 tile_map[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
+  {
+    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
+    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0},
+    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0},
+    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0},
+  };
+
+  r32 tile_width = 75.0f;
+  r32 tile_height = 75.0f;
+
+  // NOTE(Ryan): Useful to have these to only show half of a tile, etc.
+  r32 upper_left_x = 0.0f;
+  r32 upper_left_y = 0.0f;
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -127,7 +148,6 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         r32 dplayer_x = 0.0f; 
         r32 dplayer_y = 0.0f; 
 
-        // TODO(Ryan): Negatives are going faster?
         if (controller.action_left.ended_down) dplayer_x = -1.0f;
         if (controller.action_right.ended_down) dplayer_x = 1.0f;
         if (controller.action_up.ended_down) dplayer_y = -1.0f;
@@ -136,32 +156,31 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         dplayer_x *= 64.0f;
         dplayer_y *= 64.0f;
 
-        state->player_x += (dplayer_x * input->frame_dt);
-        state->player_y += (dplayer_y * input->frame_dt);
+        r32 new_player_x = state->player_x + (dplayer_x * input->frame_dt);
+        r32 new_player_y = state->player_y + (dplayer_y * input->frame_dt);
+
+        int player_tile_x = truncate_r32_to_int((new_player_x - upper_left_x) / tile_width);
+        int player_tile_y = truncate_r32_to_int((new_player_y - upper_left_y) / tile_height);
+
+        bool is_tile_valid = false;
+        if (player_tile_x >= 0 && player_tile_x < TILE_MAP_NUM_TILES_X &&
+            player_tile_y >= 0 && player_tile_y < TILE_MAP_NUM_TILES_Y)
+        {
+          u32 tile_map_value = tile_map[player_tile_y][player_tile_x];
+          is_tile_valid = (tile_map_value == 0);
+        }
+
+        if (is_tile_valid)
+        {
+          state->player_x = new_player_x;
+          state->player_y = new_player_y;
+        }
+
       }
 
     }
   }
 
-  u32 tile_map[9][16] =
-  {
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0},
-    {0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-  };
-
-  r32 tile_width = 75.0f;
-  r32 tile_height = 75.0f;
-
-  // NOTE(Ryan): Useful to have these to only show half of a tile, etc.
-  r32 upper_left_x = 0.0f;
-  r32 upper_left_y = 0.0f;
 
   draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
 
