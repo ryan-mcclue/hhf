@@ -29,30 +29,30 @@ typedef struct HHFThreadContext
   int placeholder;
 } HHFThreadContext;
 
-struct HHFBackBuffer
+typedef struct HHFBackBuffer
 {
   // NOTE(Ryan): Memory order: XX RR GG BB
   u8 *memory;
   int width;
   int height;
-};
+} HHFBackBuffer;
 
-struct HHFSoundBuffer
+typedef struct HHFSoundBuffer
 {
   int samples_per_second;
   // NOTE(Ryan): Dual channel
   s16 *samples;
   int num_samples;
-};
+} HHFSoundBuffer;
 
-struct HHFInputButtonState
+typedef struct HHFInputButtonState
 {
   int half_transition_count;
   bool ended_down;
-};
+} HHFInputButtonState;
 
 #define HHF_INPUT_NUM_CONTROLLER_BUTTONS 12
-struct HHFInputController
+typedef struct HHFInputController
 {
   bool is_connected;
   bool is_analog;
@@ -86,10 +86,10 @@ struct HHFInputController
       HHFInputButtonState __TERMINATOR__;
     };
   };
-};
+} HHFInputController;
 
 #define HHF_INPUT_MAX_NUM_CONTROLLERS 8
-struct HHFInput
+typedef struct HHFInput
 {
   r32 frame_dt;
 
@@ -106,9 +106,9 @@ struct HHFInput
   int mouse_x, mouse_y, mouse_wheel;
 
   HHFInputController controllers[HHF_INPUT_MAX_NUM_CONTROLLERS];
-};
+} HHFInput;
 
-struct HHFMemory
+typedef struct HHFMemory
 {
   bool is_initialized;
 
@@ -117,21 +117,21 @@ struct HHFMemory
   u64 permanent_size;
   u8 *transient;
   u64 transient_size;
-};
+} HHFMemory;
 
-struct HHFPlatformReadFileResult
+typedef struct HHFPlatformReadFileResult
 {
   void *contents;
   u64 size;
   int errno_code;
-};
+} HHFPlatformReadFileResult;
 
-struct HHFPlatform
+typedef struct HHFPlatform
 {
   HHFPlatformReadFileResult (*read_entire_file)(HHFThreadContext *thread, char *file_name);
   void (*free_read_file_result)(HHFThreadContext *thread, HHFPlatformReadFileResult *read_result);
   int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, u64 size);
-};
+} HHFPlatform;
 
 #if defined(__cplusplus) 
 extern "C"

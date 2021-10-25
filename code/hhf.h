@@ -59,9 +59,15 @@ safe_truncate_u64(u64 val)
   return (u32)val;
 }
 
+// IMPORTANT(Ryan): Inline not for performance here, just a marker for when we do performance tuning 
 inline int
-truncate_r32_to_int(r32 val)
+zero_truncate_r32_to_int(r32 val)
 {
   return (int)val;
 }
 
+inline int
+floor_r32_to_int(r32 val)
+{
+  return (int)floorf(val);
+}
