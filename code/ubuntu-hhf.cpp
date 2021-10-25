@@ -663,7 +663,7 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
       }
       if (dev_event_code == KEY_F12) want_to_run = false;
 
-  
+      // NOTE(Ryan): Recording is useful for debugging input sequences
       //if (dev_event_code == KEY_R)
       //{
       //  if (!are_recording_input)
@@ -690,7 +690,7 @@ hhf_platform_free_read_file_result(HHFThreadContext *thread_context, HHFPlatform
 
 // TODO(Ryan): Remove blocking and add write protection (writing to intermediate file)
 int
-hhf_platform_write_entire_file(HHFThreadContext *thread_context, char *file_name, void *memory, size_t size)
+hhf_platform_write_entire_file(HHFThreadContext *thread_context, char *file_name, void *memory, u64 size)
 {
   int result = 0;
 

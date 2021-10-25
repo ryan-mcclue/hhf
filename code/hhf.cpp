@@ -2,10 +2,32 @@
 
 #include "hhf.h"
 
-struct HHFState
+struct State
 {
   r32 player_x;
   r32 player_y;
+};
+
+struct TileMap
+{
+  int num_tiles_x;
+  int num_tiles_y;
+
+  r32 upper_left_x;
+  r32 upper_left_y;
+  r32 tile_width;
+  r32 tile_height;
+
+  u32 *tiles;
+};
+
+struct World
+{
+  // TODO(Ryan): Add sparseness
+  int num_tile_maps_x;
+  int num_tile_maps_y;
+
+  TileMap *tile_maps;
 };
 
 #if 0
@@ -24,6 +46,7 @@ render_weird_gradient(HHFBackBuffer *back_buffer, int x_offset, int y_offset)
       u8 red = back_buffer_x + x_offset;
       u8 green = back_buffer_y + y_offset;
       u8 blue = 0x33;
+      // IMPORTANT(Ryan): Compute with native 32bit, store by bitpacking
       *pixel++ = red << 16 | green << 8 | blue;
     }
   }
@@ -93,18 +116,28 @@ draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32
 
 }
 
-struct TileMap
+INTERNAL inline TileMap *
+get_tile_map(World *world, int x, int y)
 {
-  int num_tiles_x;
-  int num_tiles_y;
+  TileMap *tile_map = NULL;
+  if (x >= 0 && x < world->num_tile_maps_x && y >=0 && y < world->num_tile_maps_y)
+  {
+    tile_map = &world->tile_maps[y * world->num_tile_maps_x + x];
+  }
+  return tile_map;
+}
 
-  r32 upper_left_x;
-  r32 upper_left_y;
-  r32 tile_width;
-  r32 tile_height;
+INTERNAL bool
+is_world_point_empty(World *world, int tile_map_x, int tile_map_y, int tile_x, int tile_y)
+{
+  TileMap *tile_map = get_tile_map(world, tile_map_x, tile_map_y);
+  if (tile_map != NULL)
+  {
+    // is_tile_map_point_empty(tile_map, tile_x, tile_y); 
+  }
 
-  u32 *tiles;
-};
+  return false;
+}
 
 INTERNAL inline u32
 get_tile_map_value_unchecked(TileMap *tile_map, int x, int y)
@@ -129,14 +162,15 @@ is_tile_map_point_empty(TileMap *tile_map, r32 x, r32 y)
   return is_tile_empty;
 }
 
+
 extern "C" void
 hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
                       HHFPlatform *platform)
 {
-  ASSERT(sizeof(HHFState) <= memory->permanent_size);
+  ASSERT(sizeof(State) <= memory->permanent_size);
 
-  HHFState *state = (HHFState *)memory->permanent;
+  State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
     state->player_x = 300;
@@ -222,6 +256,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         r32 new_player_x = state->player_x + (dplayer_x * input->frame_dt);
         r32 new_player_y = state->player_y + (dplayer_y * input->frame_dt);
         
+        // TODO(Ryan): Fix stopping before walls and possible going through thin walls
         bool is_tile_valid = is_tile_map_point_empty(active_tile_map, new_player_x, new_player_y) &&
           is_tile_map_point_empty(active_tile_map, new_player_x + player_width * 0.5f, new_player_y) &&
           is_tile_map_point_empty(active_tile_map, new_player_x - player_width * 0.5f, new_player_y);
