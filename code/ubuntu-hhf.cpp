@@ -462,10 +462,24 @@ udev_process_analog_button(HHFInputButtonState *prev_button_state_neg,
 //   }
 //}
 
+struct RecordingState
+{
+  bool are_recording;
+  bool are_playing;
+
+  void *mem;
+  int mem_size;
+
+  void *input;
+  int max_input_size;
+  int input_bytes_written;
+  int input_bytes_read;
+};
+
 INTERNAL void
 udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FDS], 
                         HHFInput *prev_input, HHFInput *cur_input,
-                        XlibInfo *info)
+                        XlibInfo *info, HHFMemory *hhf_memory, RecordingState *recording_state)
 {
   struct epoll_event epoll_events[EPOLL_UDEV_MAX_EVENTS] = {0};
   int num_epoll_events = epoll_wait(epoll_fd, epoll_events, EPOLL_UDEV_MAX_EVENTS, 0);
@@ -661,25 +675,72 @@ udev_check_poll_devices(int epoll_fd, UdevPollDevice poll_devices[MAX_PROCESS_FD
         XSendEvent(info->display, info->root, False, 
                    SubstructureNotifyMask, (XEvent *)&maximise_ev);
       }
-      if (dev_event_code == KEY_F12) want_to_run = false;
 
-      // NOTE(Ryan): Recording is useful for debugging input sequences
-      //if (dev_event_code == KEY_R)
-      //{
-      //  if (!are_recording_input)
-      //  {
-      //    are_recording_input = true;
-      //    are_playing_input = false;
-      //  }
-      //  else
-      //  {
-      //    are_recording_input = false;
-      //    are_playing_input = true;
-      //  }
-      //}
+      if (dev_event_code == KEY_F5) want_to_run = false;
+
+      if (dev_event_code == KEY_R && first_down)
+      {
+        if (!recording_state->are_recording)
+        {
+          memcpy(recording_state->mem, hhf_memory->permanent, recording_state->mem_size);
+
+          recording_state->input_bytes_written = 0;
+
+          recording_state->are_recording = true;
+          recording_state->are_playing = false;
+        }
+        else
+        {
+          memcpy(hhf_memory->permanent, recording_state->mem, recording_state->mem_size);
+
+          recording_state->input_bytes_read = 0;
+          
+          recording_state->are_recording = false;
+          recording_state->are_playing = true;
+        }
+      }
+      if (dev_event_code == KEY_T && first_down)
+      {
+        if (recording_state->are_recording || recording_state->are_playing)
+        {
+          hhf_memory->permanent = (u8 *)recording_state->mem;
+          recording_state->input_bytes_written = 0;
+          recording_state->input_bytes_read = 0;
+
+          recording_state->are_recording = false;
+          recording_state->are_playing = false;
+        }
+      }
 #endif
     }
   }
+}
+
+void
+record_input(RecordingState *recording_state, HHFInput *input)
+{
+  int bytes_to_write = sizeof(*input);
+  ASSERT(recording_state->input_bytes_written + bytes_to_write < 
+          recording_state->max_input_size);
+
+  void *input_write_location = (u8 *)recording_state->input + 
+                                 recording_state->input_bytes_written;
+  memcpy(input_write_location, (void *)input, bytes_to_write);  
+
+  recording_state->input_bytes_written += bytes_to_write;
+}
+
+void
+playback_input(RecordingState *recording_state, HHFInput **input)
+{
+  if (recording_state->input_bytes_read == recording_state->input_bytes_written)
+  {
+    recording_state->input_bytes_read = 0;
+  }
+
+  *input = (HHFInput *)((u8 *)recording_state->input + recording_state->input_bytes_read);
+  
+  recording_state->input_bytes_read += sizeof(*input);
 }
 
 void
@@ -825,24 +886,6 @@ copy_file(char *src_file, char *dst_file)
 //  // create memory mapped file with HHFMemory initially written to it.
 //  // use a separate file for input
 //  write(memory);
-//}
-
-//INTERNAL void
-//end_recording_input(void)
-//{
-//  close(input_recording_handle);
-//}
-//
-//INTERNAL void
-//playback_input(void)
-//{
-//  read(handle, new_input, sizeof(*new_input));
-//  if (end_of_file)
-//  {
-//    // or just seek?
-//    end_recording_input();
-//    begin_playing_input();
-//  }
 //}
 
 // NOTE(Ryan): Not actually atomic, just ensuring that read and write in one go.
@@ -1034,7 +1077,7 @@ main(int argc, char *argv[])
   hhf_memory.permanent = (u8 *)hhf_memory_raw;
   hhf_memory.permanent_size = hhf_permanent_size;
   hhf_memory.transient = (u8 *)hhf_memory_raw + hhf_permanent_size;
-  hhf_memory.permanent_size = hhf_transient_size;
+  hhf_memory.transient_size = hhf_transient_size;
 
   HHFThreadContext hhf_thread_context = {};
 
@@ -1082,7 +1125,13 @@ main(int argc, char *argv[])
   struct timespec prev_timespec = {};
   clock_gettime(CLOCK_MONOTONIC_RAW, &prev_timespec);
 
-  int input_recording_index = 0, input_playing_index = 0;
+  RecordingState recording_state = {};
+  recording_state.mem_size = hhf_memory.permanent_size + hhf_memory.transient_size;
+  recording_state.mem = malloc(recording_state.mem_size);
+  recording_state.max_input_size = sizeof(HHFInput) * 60 * 10;
+  recording_state.input = malloc(recording_state.max_input_size); 
+  HHFInput *new_input = NULL;
+
   bool input_passed_to_hhf = false;
   while (want_to_run)
   {
@@ -1113,7 +1162,7 @@ main(int argc, char *argv[])
       if (xlib_focused_window == xlib_window)
       {
         udev_check_poll_devices(epoll_udev_fd, udev_poll_devices, &hhf_prev_input, 
-                                &hhf_cur_input, &xlib_info);
+                                &hhf_cur_input, &xlib_info, &hhf_memory, &recording_state);
       }
 
       if (xlib_event.type == GenericEvent)
@@ -1136,18 +1185,33 @@ main(int argc, char *argv[])
               want_to_reload_update_and_render = 0;
             }
             
-            //if (are_recording_input)
-            //{
-            //  record_state(&hhf_memory, &hhf_cur_input);
-            //}
-            //if (are_playing_input)
-            //{
-            //  wrap in struct to preserve original input and memory
-            //  playback_state(&hhf_memory, &hhf_cur_input);
-            //}
+            if (recording_state.are_recording)
+            {
+              record_input(&recording_state, &hhf_cur_input);
+            }
+            if (recording_state.are_playing)
+            {
+              if (recording_state.input_bytes_read == recording_state.input_bytes_written)
+              {
+                recording_state.input_bytes_read = 0;
+                memcpy(hhf_memory.permanent, recording_state.mem, recording_state.mem_size);
+              }
 
-            update_and_render(&hhf_thread_context, &hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
-                              &hhf_memory, &hhf_platform);
+              new_input = (HHFInput *)((u8 *)recording_state.input + recording_state.input_bytes_read);
+
+              recording_state.input_bytes_read += sizeof(HHFInput);
+            }
+            if (recording_state.are_playing)
+            {
+              update_and_render(&hhf_thread_context, &hhf_back_buffer, &hhf_sound_buffer, new_input, 
+                  &hhf_memory, &hhf_platform);
+            }
+            else
+            {
+              update_and_render(&hhf_thread_context, &hhf_back_buffer, &hhf_sound_buffer, &hhf_cur_input, 
+                  &hhf_memory, &hhf_platform);
+            }
+
             input_passed_to_hhf = true;
 
             // TODO(Ryan): Add however long last frame took to audio minimum size
