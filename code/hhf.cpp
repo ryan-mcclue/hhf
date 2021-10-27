@@ -175,12 +175,12 @@ get_canonical_position(World *world, RawPosition *raw_pos)
     can_pos.tile_y = world->num_tiles_y + can_pos.tile_y;
     can_pos.tile_map_y--;
   }
-  if (can_pos.tile_x > world->num_tiles_x)
+  if (can_pos.tile_x >= world->num_tiles_x)
   {
     can_pos.tile_x = can_pos.tile_x - world->num_tiles_x;
     can_pos.tile_map_x++;
   }
-  if (can_pos.tile_y > world->num_tiles_y)
+  if (can_pos.tile_y >= world->num_tiles_y)
   {
     can_pos.tile_y = can_pos.tile_y - world->num_tiles_y;
     can_pos.tile_map_y++;
@@ -351,7 +351,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         player_left_pos.x = new_player_x - (0.5f * player_width);
 
         RawPosition player_right_pos = player_pos;
-        player_left_pos.x = new_player_x + (0.5f * player_width);
+        player_right_pos.x = new_player_x + (0.5f * player_width);
 
         // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
         bool is_tile_valid = is_world_point_empty(&world, &player_pos) &&

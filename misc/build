@@ -11,7 +11,7 @@ common_compiler_flags="-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextr
   -Warray-bounds=2 -march=native -ffunction-sections -fdata-sections $ignored_warnings"
 
 # TODO(Ryan): memfault Usefulness of linker map files (analyse program size?)
-dev_compiler_flags="-Og -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
+dev_compiler_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
 
 # IMPORTANT(Ryan): Xpresent is not present on fresh installs of Ubuntu.  
 # Work towards utilising GL (will also not have to do jit rendering)
