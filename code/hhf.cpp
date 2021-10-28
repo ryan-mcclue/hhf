@@ -2,14 +2,6 @@
 
 #include "hhf.h"
 
-struct State
-{
-  int tile_map_x;
-  int tile_map_y;
-  r32 player_x;
-  r32 player_y;
-};
-
 struct TileMap
 {
   u32 *tiles;
@@ -17,6 +9,11 @@ struct TileMap
 
 struct World
 {
+  // IMPORTANT(Ryan): We don't want our units to be in pixels
+  r32 tile_side_in_metres;
+  int tile_side_in_pixels;
+  r32 metres_to_pixels;
+
   // TODO(Ryan): Add sparseness
   int num_tile_maps_x;
   int num_tile_maps_y;
@@ -24,21 +21,11 @@ struct World
   int num_tiles_x;
   int num_tiles_y;
 
+  // NOTE(Ryan): Useful for drawing say half a tile
   r32 upper_left_x;
   r32 upper_left_y;
-  r32 tile_width;
-  r32 tile_height;
 
   TileMap *tile_maps;
-};
-
-struct RawPosition
-{
-  int tile_map_x;
-  int tile_map_y;
-
-  // relative to tile map
-  r32 x, y;
 };
 
 struct CanonicalPosition
@@ -51,6 +38,11 @@ struct CanonicalPosition
 
   // relative to tile
   r32 x, y;
+};
+
+struct State
+{
+  CanonicalPosition player_pos;
 };
 
 #if 0
@@ -150,43 +142,31 @@ get_tile_map(World *world, int x, int y)
   return tile_map;
 }
 
-INTERNAL CanonicalPosition
-get_canonical_position(World *world, RawPosition *raw_pos)
+INTERNAL void
+recanonicalise_coord(World *world, int tile_count, int *tile_map_coord, int *tile_coord, r32 *tile_rel)
 {
-  CanonicalPosition can_pos = {};
-  can_pos.tile_map_x = raw_pos->tile_map_x;
-  can_pos.tile_map_y = raw_pos->tile_map_y;
+  int offset = floor_r32_to_int(*tile_rel / world->tile_side_in_metres);
+  *tile_coord += offset;
+  // TODO(Ryan): If tile_rel is a very small negative, we will wrap back 
+  *tile_rel -= (offset * world->tile_side_in_metres);
 
-  r32 x = raw_pos->x - world->upper_left_x;
-  r32 y = raw_pos->y - world->upper_left_y;
-  can_pos.tile_x = floor_r32_to_int(x / world->tile_width);
-  can_pos.tile_y = floor_r32_to_int(y / world->tile_height);
+  if (*tile_coord < 0)
+  {
+    *tile_coord = *tile_coord + tile_count;
+    *tile_map_coord -= 1;
+  }
+  if (*tile_coord >= tile_count)
+  {
+    *tile_coord = *tile_coord - tile_count;
+    *tile_map_coord += 1;
+  }
+}
 
-  can_pos.x = x - (can_pos.tile_x * world->tile_width);
-  can_pos.y = y - (can_pos.tile_y * world->tile_height);
-
-  if (can_pos.tile_x < 0)
-  {
-    can_pos.tile_x = world->num_tiles_x + can_pos.tile_x;
-    can_pos.tile_map_x--;
-  }
-  if (can_pos.tile_y < 0)
-  {
-    can_pos.tile_y = world->num_tiles_y + can_pos.tile_y;
-    can_pos.tile_map_y--;
-  }
-  if (can_pos.tile_x >= world->num_tiles_x)
-  {
-    can_pos.tile_x = can_pos.tile_x - world->num_tiles_x;
-    can_pos.tile_map_x++;
-  }
-  if (can_pos.tile_y >= world->num_tiles_y)
-  {
-    can_pos.tile_y = can_pos.tile_y - world->num_tiles_y;
-    can_pos.tile_map_y++;
-  }
-
-  return can_pos;
+INTERNAL void
+recanonicalise_position(World *world, CanonicalPosition *pos)
+{
+  recanonicalise_coord(world, world->num_tiles_x, &pos->tile_map_x, &pos->tile_x, &pos->x);
+  recanonicalise_coord(world, world->num_tiles_y, &pos->tile_map_y, &pos->tile_y, &pos->y);
 }
 
 INTERNAL inline u32
@@ -204,35 +184,40 @@ is_tile_map_point_empty(World *world, TileMap *tile_map, int tile_x, int tile_y)
 }
 
 INTERNAL bool
-is_world_point_empty(World *world, RawPosition *raw_pos)
+is_world_point_empty(World *world, CanonicalPosition *pos)
 {
   bool is_empty = false;
 
-  CanonicalPosition can_pos = get_canonical_position(world, raw_pos);
-  TileMap *tile_map = get_tile_map(world, can_pos.tile_map_x, can_pos.tile_map_y);
+  TileMap *tile_map = get_tile_map(world, pos->tile_map_x, pos->tile_map_y);
   if (tile_map != NULL)
   {
-    is_empty = is_tile_map_point_empty(world, tile_map, can_pos.tile_x, can_pos.tile_y);
+    is_empty = is_tile_map_point_empty(world, tile_map, pos->tile_x, pos->tile_y);
   }
 
   return is_empty;
 }
 
-
+// TODO(Ryan): Ensure game is procederal and rich in combinatorics
 extern "C" void
 hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
                       HHFPlatform *platform)
 {
+  /* TODO(Ryan): 
+   * Remove dependency on pixel as units of measurements 
+   * Remove inverted cartesian plane 
+  */
   ASSERT(sizeof(State) <= memory->permanent_size);
 
   State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
-    state->player_x = 300;
-    state->player_y = 300;
-    state->tile_map_x = 0;
-    state->tile_map_y = 0;
+    state->player_pos.tile_map_x = 0;
+    state->player_pos.tile_map_y = 0;
+    state->player_pos.tile_x = 4;
+    state->player_pos.tile_y = 4;
+    state->player_pos.x = 5.0f;
+    state->player_pos.y = 5.0f;
     memory->is_initialized = true;
   }
 
@@ -294,8 +279,9 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   tile_maps[3].tiles = (u32 *)tile_map_tiles11;
 
   World world = {};
-  world.tile_width = 75.0f;
-  world.tile_height = 75.0f;
+  world.tile_side_in_metres = 1.4f;
+  world.tile_side_in_pixels = 75.0f;
+  world.metres_to_pixels = (r32)world.tile_side_in_pixels / (r32)world.tile_side_in_metres;
   world.upper_left_x = 0.0f;
   world.upper_left_y = 0.0f;
   world.num_tiles_x = TILE_MAP_NUM_TILES_X;
@@ -304,13 +290,13 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   world.num_tile_maps_y = 2;
   world.tile_maps = (TileMap *)tile_maps; 
 
-  TileMap *active_tile_map = get_tile_map(&world, state->tile_map_x, state->tile_map_y);
+  TileMap *active_tile_map = get_tile_map(&world, state->player_pos.tile_map_x, state->player_pos.tile_map_y);
 
   r32 player_r = 0.5f;
-  r32 player_g = 0.2f;
+  r32 player_g = 0.3f;
   r32 player_b = 1.0f;
-  r32 player_width = 0.75f * world.tile_width;
-  r32 player_height = world.tile_height;
+  r32 player_width = 0.75f * world.tile_side_in_metres;
+  r32 player_height = world.tile_side_in_metres;
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -335,38 +321,28 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         if (controller.action_up.ended_down) dplayer_y = -1.0f;
         if (controller.action_down.ended_down) dplayer_y = 1.0f;
 
-        dplayer_x *= 128.0f;
-        dplayer_y *= 128.0f;
+        dplayer_x *= 5.0f;
+        dplayer_y *= 5.0f;
 
-        r32 new_player_x = state->player_x + (dplayer_x * input->frame_dt);
-        r32 new_player_y = state->player_y + (dplayer_y * input->frame_dt);
+        CanonicalPosition test_player_pos = state->player_pos;
+        test_player_pos.x += (dplayer_x * input->frame_dt);
+        test_player_pos.y += (dplayer_y * input->frame_dt); 
+        recanonicalise_position(&world, &test_player_pos);
 
-        RawPosition player_pos = {};
-        player_pos.tile_map_x = state->tile_map_x;
-        player_pos.tile_map_y = state->tile_map_y;
-        player_pos.x = new_player_x; 
-        player_pos.y = new_player_y; 
+        CanonicalPosition player_left_pos = test_player_pos;
+        player_left_pos.x -= (0.5f * player_width);
+        recanonicalise_position(&world, &player_left_pos);
 
-        RawPosition player_left_pos = player_pos; 
-        player_left_pos.x = new_player_x - (0.5f * player_width);
-
-        RawPosition player_right_pos = player_pos;
-        player_right_pos.x = new_player_x + (0.5f * player_width);
+        CanonicalPosition player_right_pos = test_player_pos;
+        player_right_pos.x += (0.5f * player_width);
+        recanonicalise_position(&world, &player_right_pos);
 
         // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
-        bool is_tile_valid = is_world_point_empty(&world, &player_pos) &&
+        bool is_tile_valid = is_world_point_empty(&world, &test_player_pos) &&
           is_world_point_empty(&world, &player_left_pos) && 
           is_world_point_empty(&world, &player_right_pos);
 
-        if (is_tile_valid)
-        {
-          CanonicalPosition can_pos = get_canonical_position(&world, &player_pos);
-
-          state->tile_map_x = can_pos.tile_map_x;
-          state->tile_map_y = can_pos.tile_map_y;
-          state->player_x = world.upper_left_x + world.tile_width * can_pos.tile_x + can_pos.x;
-          state->player_y = world.upper_left_y + world.tile_width * can_pos.tile_y + can_pos.y;
-        }
+        if (is_tile_valid) state->player_pos = test_player_pos;
 
       }
 
@@ -383,18 +359,22 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       r32 grayscale = 0.5f;
       if (tile_id == 1) grayscale = 1.0f;
 
-      r32 min_x = world.upper_left_x + ((r32)x * world.tile_width);
-      r32 min_y = world.upper_left_y + ((r32)y * world.tile_height);
-      r32 max_x = min_x + world.tile_width;
-      r32 max_y = min_y + world.tile_height;
+      if (x == state->player_pos.tile_x && y == state->player_pos.tile_y) grayscale = 0.0f;
+
+      r32 min_x = world.upper_left_x + ((r32)x * world.tile_side_in_pixels);
+      r32 min_y = world.upper_left_y + ((r32)y * world.tile_side_in_pixels);
+      r32 max_x = min_x + world.tile_side_in_pixels;
+      r32 max_y = min_y + world.tile_side_in_pixels;
 
       draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
     }
   }
 
 
-  r32 player_min_x = state->player_x - (player_width * 0.5f);
-  r32 player_min_y = state->player_y - player_height;
-  draw_rect(back_buffer, player_min_x, player_min_y, player_min_x + player_width, 
-      player_min_y + player_height, player_r, player_g, player_b);
+  r32 player_min_x = world.upper_left_x + (world.tile_side_in_pixels * state->player_pos.tile_x) +
+                      (world.metres_to_pixels * state->player_pos.x - (player_width * world.metres_to_pixels * 0.5f));
+  r32 player_min_y = world.upper_left_y + (world.tile_side_in_pixels * state->player_pos.tile_y) +
+                      (world.metres_to_pixels * state->player_pos.y - player_height * world.metres_to_pixels);
+  draw_rect(back_buffer, player_min_x, player_min_y, player_min_x + player_width*world.metres_to_pixels, 
+      player_min_y + player_height*world.metres_to_pixels, player_r, player_g, player_b);
 }

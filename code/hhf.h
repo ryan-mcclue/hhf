@@ -63,11 +63,15 @@ safe_truncate_u64(u64 val)
 inline int
 zero_truncate_r32_to_int(r32 val)
 {
-  return (int)val;
+  // NOTE(Ryan): This 'result' formatting is so we can always see the return value in the debugger
+  int result = (int)val;
+  return result; 
 }
 
 inline int
 floor_r32_to_int(r32 val)
 {
-  return (int)floorf(val);
+  // NOTE(Ryan): Some standard library functions perform 'unecessary' operations to conform with standard
+  int result = (int)floorf(val);
+  return result; 
 }

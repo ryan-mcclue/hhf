@@ -7,8 +7,9 @@ test ! -d build && mkdir build
 ignored_warnings='-Wno-unused-variable -Wno-unused-function -Wno-unused-but-set-variable
   -Wno-unused-parameter -Wno-missing-field-initializers -Wno-write-strings
   -Wno-unused-result'
+# TODO(Ryan): Are we fine with breaking IEEE floating point (losing precision) for speed?
 common_compiler_flags="-fno-exceptions -fno-rtti -std=c++2a -Werror -Wall -Wextra -pedantic 
-  -Warray-bounds=2 -march=native -ffunction-sections -fdata-sections $ignored_warnings"
+  -Warray-bounds=2 -march=native -ffast-math -ffunction-sections -fdata-sections $ignored_warnings"
 
 # TODO(Ryan): memfault Usefulness of linker map files (analyse program size?)
 dev_compiler_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
