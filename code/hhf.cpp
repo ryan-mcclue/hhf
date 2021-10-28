@@ -22,14 +22,16 @@ struct World
   int num_tiles_y;
 
   // NOTE(Ryan): Useful for drawing say half a tile
-  r32 upper_left_x;
-  r32 upper_left_y;
+  r32 lower_left_x;
+  r32 lower_left_y;
 
   TileMap *tile_maps;
 };
 
-struct CanonicalPosition
+struct WorldPosition
 {
+// IMPORTANT(Ryan): We want at least 8bits for sub-pixel positioning to perform anti-aliasing
+// Therefore, only using r32 does not have enough data in mantissa for a large world
   int tile_map_x;
   int tile_map_y;
 
@@ -42,7 +44,7 @@ struct CanonicalPosition
 
 struct State
 {
-  CanonicalPosition player_pos;
+  WorldPosition player_pos;
 };
 
 #if 0
@@ -163,7 +165,7 @@ recanonicalise_coord(World *world, int tile_count, int *tile_map_coord, int *til
 }
 
 INTERNAL void
-recanonicalise_position(World *world, CanonicalPosition *pos)
+recanonicalise_position(World *world, WorldPosition *pos)
 {
   recanonicalise_coord(world, world->num_tiles_x, &pos->tile_map_x, &pos->tile_x, &pos->x);
   recanonicalise_coord(world, world->num_tiles_y, &pos->tile_map_y, &pos->tile_y, &pos->y);
@@ -184,7 +186,7 @@ is_tile_map_point_empty(World *world, TileMap *tile_map, int tile_x, int tile_y)
 }
 
 INTERNAL bool
-is_world_point_empty(World *world, CanonicalPosition *pos)
+is_world_point_empty(World *world, WorldPosition *pos)
 {
   bool is_empty = false;
 
@@ -203,6 +205,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
                       HHFPlatform *platform)
 {
+  // BP(NULL);
   /* TODO(Ryan): 
    * Remove dependency on pixel as units of measurements 
    * Remove inverted cartesian plane 
@@ -221,6 +224,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     memory->is_initialized = true;
   }
 
+// IMPORTANT(Ryan): Y is going up
   #define TILE_MAP_NUM_TILES_X 16
   #define TILE_MAP_NUM_TILES_Y 9
   u32 tile_map_tiles00[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
@@ -282,8 +286,8 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   world.tile_side_in_metres = 1.4f;
   world.tile_side_in_pixels = 75.0f;
   world.metres_to_pixels = (r32)world.tile_side_in_pixels / (r32)world.tile_side_in_metres;
-  world.upper_left_x = 0.0f;
-  world.upper_left_y = 0.0f;
+  world.lower_left_x = 0.0f;
+  world.lower_left_y = (r32)back_buffer->height;
   world.num_tiles_x = TILE_MAP_NUM_TILES_X;
   world.num_tiles_y = TILE_MAP_NUM_TILES_Y;
   world.num_tile_maps_x = 2;
@@ -318,22 +322,22 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
 
         if (controller.action_left.ended_down) dplayer_x = -1.0f;
         if (controller.action_right.ended_down) dplayer_x = 1.0f;
-        if (controller.action_up.ended_down) dplayer_y = -1.0f;
-        if (controller.action_down.ended_down) dplayer_y = 1.0f;
+        if (controller.action_up.ended_down) dplayer_y = 1.0f;
+        if (controller.action_down.ended_down) dplayer_y = -1.0f;
 
         dplayer_x *= 5.0f;
         dplayer_y *= 5.0f;
 
-        CanonicalPosition test_player_pos = state->player_pos;
+        WorldPosition test_player_pos = state->player_pos;
         test_player_pos.x += (dplayer_x * input->frame_dt);
         test_player_pos.y += (dplayer_y * input->frame_dt); 
         recanonicalise_position(&world, &test_player_pos);
 
-        CanonicalPosition player_left_pos = test_player_pos;
+        WorldPosition player_left_pos = test_player_pos;
         player_left_pos.x -= (0.5f * player_width);
         recanonicalise_position(&world, &player_left_pos);
 
-        CanonicalPosition player_right_pos = test_player_pos;
+        WorldPosition player_right_pos = test_player_pos;
         player_right_pos.x += (0.5f * player_width);
         recanonicalise_position(&world, &player_right_pos);
 
@@ -361,20 +365,20 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
 
       if (x == state->player_pos.tile_x && y == state->player_pos.tile_y) grayscale = 0.0f;
 
-      r32 min_x = world.upper_left_x + ((r32)x * world.tile_side_in_pixels);
-      r32 min_y = world.upper_left_y + ((r32)y * world.tile_side_in_pixels);
+      r32 min_x = world.lower_left_x + ((r32)x * world.tile_side_in_pixels);
+      r32 min_y = world.lower_left_y - ((r32)y * world.tile_side_in_pixels);
       r32 max_x = min_x + world.tile_side_in_pixels;
-      r32 max_y = min_y + world.tile_side_in_pixels;
+      r32 max_y = min_y - world.tile_side_in_pixels;
 
-      draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
+      draw_rect(back_buffer, min_x, max_y, max_x, min_y, grayscale, grayscale, grayscale);
     }
   }
 
 
-  r32 player_min_x = world.upper_left_x + (world.tile_side_in_pixels * state->player_pos.tile_x) +
+  r32 player_min_x = world.lower_left_x + (world.tile_side_in_pixels * state->player_pos.tile_x) +
                       (world.metres_to_pixels * state->player_pos.x - (player_width * world.metres_to_pixels * 0.5f));
-  r32 player_min_y = world.upper_left_y + (world.tile_side_in_pixels * state->player_pos.tile_y) +
+  r32 player_min_y = world.lower_left_y - (world.tile_side_in_pixels * state->player_pos.tile_y) -
                       (world.metres_to_pixels * state->player_pos.y - player_height * world.metres_to_pixels);
-  draw_rect(back_buffer, player_min_x, player_min_y, player_min_x + player_width*world.metres_to_pixels, 
-      player_min_y + player_height*world.metres_to_pixels, player_r, player_g, player_b);
+  draw_rect(back_buffer, player_min_x, player_min_y - player_height*world.metres_to_pixels, player_min_x + player_width*world.metres_to_pixels, 
+      player_min_y, player_r, player_g, player_b);
 }

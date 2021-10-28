@@ -60,6 +60,7 @@ safe_truncate_u64(u64 val)
 }
 
 // IMPORTANT(Ryan): Inline not for performance here, just a marker for when we do performance tuning 
+// If we wanted to force inline would be a compiler extension
 inline int
 zero_truncate_r32_to_int(r32 val)
 {

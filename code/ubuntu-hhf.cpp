@@ -1239,6 +1239,10 @@ main(int argc, char *argv[])
             struct timespec end_timespec = {};
             clock_gettime(CLOCK_MONOTONIC_RAW, &end_timespec);
             r32 ms_per_frame = timespec_diff(&prev_timespec, &end_timespec) / 1000000.0f;
+
+            char ms_per_frame_buf[16] = {};
+            snprintf(ms_per_frame_buf, 16, "%.02f", ms_per_frame); 
+            XStoreName(xlib_display, xlib_window, ms_per_frame_buf);
             //printf("ms per frame: %.02f\n", ms_per_frame); 
             //printf("mega cycles per frame: %.02f\n", (r64)(end_cycle_count - prev_cycle_count) / 1000000.0f); 
 
