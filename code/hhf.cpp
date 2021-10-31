@@ -2,44 +2,47 @@
 
 #include "hhf.h"
 
-struct TileMap
+struct TileChunk
 {
   u32 *tiles;
 };
 
 struct World
 {
+  u32 chunk_mask;
+  u32 chunk_shift;
+  u32 chunk_dim;
+
   // IMPORTANT(Ryan): We don't want our units to be in pixels
   r32 tile_side_in_metres;
   int tile_side_in_pixels;
   r32 metres_to_pixels;
 
   // TODO(Ryan): Add sparseness
-  int num_tile_maps_x;
-  int num_tile_maps_y;
+  int num_tile_chunks_x;
+  int num_tile_chunks_y;
 
-  int num_tiles_x;
-  int num_tiles_y;
-
-  // NOTE(Ryan): Useful for drawing say half a tile
-  r32 lower_left_x;
-  r32 lower_left_y;
-
-  TileMap *tile_maps;
+  TileChunk *tile_chunks;
 };
 
 struct WorldPosition
 {
+  u32 abs_tile_x;
+  u32 abs_tile_y;
+
 // IMPORTANT(Ryan): We want at least 8bits for sub-pixel positioning to perform anti-aliasing
 // Therefore, only using r32 does not have enough data in mantissa for a large world
-  int tile_map_x;
-  int tile_map_y;
-
-  int tile_x;
-  int tile_y;
-
   // relative to tile
+  // TODO(Ryan): rename to offset?
   r32 x, y;
+};
+
+struct TileChunkPosition
+{
+  u32 tile_chunk_x;
+  u32 tile_chunk_y;
+  u32 rel_tile_x;
+  u32 rel_tile_y;
 };
 
 struct State
@@ -133,70 +136,96 @@ draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32
 
 }
 
-INTERNAL inline TileMap *
-get_tile_map(World *world, int x, int y)
+INTERNAL TileChunk *
+get_tile_chunk(World *world, int x, int y)
 {
-  TileMap *tile_map = NULL;
-  if (x >= 0 && x < world->num_tile_maps_x && y >=0 && y < world->num_tile_maps_y)
+  TileChunk *result = NULL;
+
+  if (x >= 0 && x < world->num_tile_chunks_x && y >=0 && y < world->num_tile_chunks_y)
   {
-    tile_map = &world->tile_maps[y * world->num_tile_maps_x + x];
+    result = &world->tile_chunks[y * world->num_tile_chunks_x + x];
   }
-  return tile_map;
+
+  return result;
 }
 
 INTERNAL void
-recanonicalise_coord(World *world, int tile_count, int *tile_map_coord, int *tile_coord, r32 *tile_rel)
+recanonicalise_coord(World *world, u32 *tile_coord, r32 *tile_rel)
 {
   int offset = floor_r32_to_int(*tile_rel / world->tile_side_in_metres);
   *tile_coord += offset;
   // TODO(Ryan): If tile_rel is a very small negative, we will wrap back 
   *tile_rel -= (offset * world->tile_side_in_metres);
-
-  if (*tile_coord < 0)
-  {
-    *tile_coord = *tile_coord + tile_count;
-    *tile_map_coord -= 1;
-  }
-  if (*tile_coord >= tile_count)
-  {
-    *tile_coord = *tile_coord - tile_count;
-    *tile_map_coord += 1;
-  }
+  ASSERT(*tile_rel >= 0);
 }
 
 INTERNAL void
 recanonicalise_position(World *world, WorldPosition *pos)
 {
-  recanonicalise_coord(world, world->num_tiles_x, &pos->tile_map_x, &pos->tile_x, &pos->x);
-  recanonicalise_coord(world, world->num_tiles_y, &pos->tile_map_y, &pos->tile_y, &pos->y);
+  recanonicalise_coord(world, &pos->abs_tile_x, &pos->x);
+  recanonicalise_coord(world, &pos->abs_tile_y, &pos->y);
 }
 
-INTERNAL inline u32
-get_tile_map_value_unchecked(World *world, TileMap *tile_map, int x, int y)
+INTERNAL TileChunkPosition
+get_tile_chunk_position(World *world, u32 abs_tile_x, u32 abs_tile_y)
 {
-  return tile_map->tiles[y * world->num_tiles_x + x];
+  TileChunkPosition result = {};
+
+  result.tile_chunk_x = abs_tile_x >> world->chunk_shift;
+  result.tile_chunk_y = abs_tile_y >> world->chunk_shift;
+  result.rel_tile_x = abs_tile_x & world->chunk_mask;
+  result.rel_tile_y = abs_tile_y & world->chunk_mask;
+
+  return result;
 }
 
-INTERNAL bool
-is_tile_map_point_empty(World *world, TileMap *tile_map, int tile_x, int tile_y)
+INTERNAL u32
+get_tile_value_unchecked(World *world, TileChunk *tile_chunk, u32 tile_x, u32 tile_y)
 {
-  u32 tile_map_value = get_tile_map_value_unchecked(world, tile_map, tile_x, tile_y);
+  u32 result = 0;
 
-  return (tile_map_value == 0);
+  result = tile_chunk->tiles[tile_y * world->chunk_dim + tile_x];
+
+  return result;
 }
 
+INTERNAL u32
+get_tile_value(World *world, TileChunk *tile_chunk, u32 tile_x, u32 tile_y)
+{
+  u32 result = 0;
+
+  if (tile_chunk != NULL)
+  {
+    result = get_tile_value_unchecked(world, tile_chunk, tile_x, tile_y);
+  }
+
+  return result;
+}
+
+INTERNAL u32
+get_tile_value(World *world, u32 abs_tile_x, u32 abs_tile_y)
+{
+  u32 result = 0;
+
+  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(world, abs_tile_x, abs_tile_y);
+  TileChunk *tile_chunk = get_tile_chunk(world, tile_chunk_pos.tile_chunk_x, 
+                                          tile_chunk_pos.tile_chunk_x);
+  result = get_tile_value(world, tile_chunk, tile_chunk_pos.rel_tile_x, 
+                            tile_chunk_pos.rel_tile_y);
+  return result;
+}
+
+
+ 
 INTERNAL bool
 is_world_point_empty(World *world, WorldPosition *pos)
 {
-  bool is_empty = false;
+  bool result = false;
 
-  TileMap *tile_map = get_tile_map(world, pos->tile_map_x, pos->tile_map_y);
-  if (tile_map != NULL)
-  {
-    is_empty = is_tile_map_point_empty(world, tile_map, pos->tile_x, pos->tile_y);
-  }
+  u32 tile_value = get_tile_value(world, pos->abs_tile_x, pos->abs_tile_y);
+  result = (tile_value == 0);
 
-  return is_empty;
+  return result;
 }
 
 // TODO(Ryan): Ensure game is procederal and rich in combinatorics
@@ -215,19 +244,17 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
-    state->player_pos.tile_map_x = 0;
-    state->player_pos.tile_map_y = 0;
-    state->player_pos.tile_x = 4;
-    state->player_pos.tile_y = 4;
+    state->player_pos.abs_tile_x = 4;
+    state->player_pos.abs_tile_y = 4;
     state->player_pos.x = 5.0f;
     state->player_pos.y = 5.0f;
     memory->is_initialized = true;
   }
 
-// IMPORTANT(Ryan): Y is going up
-  #define TILE_MAP_NUM_TILES_X 16
-  #define TILE_MAP_NUM_TILES_Y 9
-  u32 tile_map_tiles00[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
+// IMPORTANT(Ryan): Drawing with y is going up. 
+  #define TILE_MAP_NUM_TILES_X 256
+  #define TILE_MAP_NUM_TILES_Y 256
+  u32 temp_tile_chunk[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
   {
     {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
     {1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
@@ -239,68 +266,31 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
     {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
   };
-  u32 tile_map_tiles01[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
-  {
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-  };
-  u32 tile_map_tiles10[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
-  {
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-  };
-  u32 tile_map_tiles11[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
-  {
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-  };
 
-  TileMap tile_maps[4] = {};
-  tile_maps[0].tiles = (u32 *)tile_map_tiles00;
-  tile_maps[1].tiles = (u32 *)tile_map_tiles01;
-  tile_maps[2].tiles = (u32 *)tile_map_tiles10;
-  tile_maps[3].tiles = (u32 *)tile_map_tiles11;
 
   World world = {};
+  world.chunk_shift = 8;
+  world.chunk_mask = (1U << world.chunk_shift) - 1;
+  world.chunk_dim = 256;
+
+  TileChunk tile_chunk = {};
+  tile_chunk.tiles = (u32 *)temp_tile_chunk;
+  world.tile_chunks = &tile_chunk;
+  world.num_tile_chunks_x = 1;
+  world.num_tile_chunks_y = 1;
+
   world.tile_side_in_metres = 1.4f;
   world.tile_side_in_pixels = 75.0f;
   world.metres_to_pixels = (r32)world.tile_side_in_pixels / (r32)world.tile_side_in_metres;
-  world.lower_left_x = 0.0f;
-  world.lower_left_y = (r32)back_buffer->height;
-  world.num_tiles_x = TILE_MAP_NUM_TILES_X;
-  world.num_tiles_y = TILE_MAP_NUM_TILES_Y;
-  world.num_tile_maps_x = 2;
-  world.num_tile_maps_y = 2;
-  world.tile_maps = (TileMap *)tile_maps; 
-
-  TileMap *active_tile_map = get_tile_map(&world, state->player_pos.tile_map_x, state->player_pos.tile_map_y);
 
   r32 player_r = 0.5f;
   r32 player_g = 0.3f;
   r32 player_b = 1.0f;
   r32 player_width = 0.75f * world.tile_side_in_metres;
   r32 player_height = world.tile_side_in_metres;
+
+  r32 centre_x = back_buffer->width * 0.5f;
+  r32 centre_y = back_buffer->height * 0.5f;
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -355,18 +345,21 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
 
   draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
 
-  for (int y = 0; y < 9; ++y)
+  for (int rel_y = -10; rel_y < 10; ++rel_y)
   {
-    for (int x = 0; x < 16; ++x)
+    for (int rel_x = -20; rel_x < 20; ++rel_x)
     {
-      u32 tile_id = get_tile_map_value_unchecked(&world, active_tile_map, x, y);
+      u32 y = state->player_pos.abs_tile_y + rel_y;
+      u32 x = state->player_pos.abs_tile_x + rel_x;
+      u32 tile_id = get_tile_value(&world, x, y);
       r32 grayscale = 0.5f;
       if (tile_id == 1) grayscale = 1.0f;
 
-      if (x == state->player_pos.tile_x && y == state->player_pos.tile_y) grayscale = 0.0f;
+      if (x == state->player_pos.abs_tile_x && 
+            y == state->player_pos.abs_tile_y) grayscale = 0.0f;
 
-      r32 min_x = world.lower_left_x + ((r32)x * world.tile_side_in_pixels);
-      r32 min_y = world.lower_left_y - ((r32)y * world.tile_side_in_pixels);
+      r32 min_x = centre_x + ((r32)rel_x * world.tile_side_in_pixels);
+      r32 min_y = centre_y - ((r32)rel_y * world.tile_side_in_pixels);
       r32 max_x = min_x + world.tile_side_in_pixels;
       r32 max_y = min_y - world.tile_side_in_pixels;
 
@@ -375,10 +368,10 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   }
 
 
-  r32 player_min_x = world.lower_left_x + (world.tile_side_in_pixels * state->player_pos.tile_x) +
-                      (world.metres_to_pixels * state->player_pos.x - (player_width * world.metres_to_pixels * 0.5f));
-  r32 player_min_y = world.lower_left_y - (world.tile_side_in_pixels * state->player_pos.tile_y) -
-                      (world.metres_to_pixels * state->player_pos.y - player_height * world.metres_to_pixels);
+  r32 player_min_x = centre_x + (world.tile_side_in_pixels * state->player_pos.x) -
+                       (player_width * world.metres_to_pixels * 0.5f);
+  r32 player_min_y = centre_y - (world.tile_side_in_pixels * state->player_pos.y) -
+                       (player_height * world.metres_to_pixels);
   draw_rect(back_buffer, player_min_x, player_min_y - player_height*world.metres_to_pixels, player_min_x + player_width*world.metres_to_pixels, 
       player_min_y, player_r, player_g, player_b);
 }
