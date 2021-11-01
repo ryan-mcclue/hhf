@@ -7,6 +7,7 @@ struct TileChunk
   u32 *tiles;
 };
 
+// TODO(Ryan): Move out into a TileMap struct and have World contain it
 struct World
 {
   u32 chunk_mask;
@@ -152,11 +153,10 @@ get_tile_chunk(World *world, int x, int y)
 INTERNAL void
 recanonicalise_coord(World *world, u32 *tile_coord, r32 *tile_rel)
 {
-  int offset = floor_r32_to_int(*tile_rel / world->tile_side_in_metres);
+  int offset = (int)roundf(*tile_rel / world->tile_side_in_metres);
   *tile_coord += offset;
   // TODO(Ryan): If tile_rel is a very small negative, we will wrap back 
   *tile_rel -= (offset * world->tile_side_in_metres);
-  ASSERT(*tile_rel >= 0);
 }
 
 INTERNAL void
@@ -228,17 +228,69 @@ is_world_point_empty(World *world, WorldPosition *pos)
   return result;
 }
 
+struct MemoryArena
+{
+  u8 *base;
+  size_t size;
+  size_t used;
+};
+
+INTERNAL void
+initialise_memory_arena(MemoryArena *arena, size_t size, void *mem)
+{
+  arena->base = mem;
+  arena->size = size;
+  arena->used = 0;
+}
+
+#define RESERVE_STRUCT(arena, struct) \
+  (struct *)(obtain_mem(arena, sizeof(struct)));
+#define RESERVE_ARRAY(arena, elem, len) \
+  (elem *)(obtain_mem(arena, sizeof(elem) * (len)));
+
+INTERNAL void *
+obtain_mem(MemoryArena *arena, size_t size)
+{
+  void *result = NULL;
+  ASSERT(arena->used + size < arena->size);
+
+  result = (u8 *)arena->base + arena->used;
+  arena->used += size;
+
+  return result;
+}
+
+INTERNAL u32
+set_tile_value(TileChunk *tile_chunk, u32 tile_x, u32 tile_y, u32 value)
+{
+  u32 result = 0;
+
+  if (tile_chunk != NULL)
+  {
+    result = set_tile_value_unchecked(world, tile_chunk, tile_x, tile_y, value);
+  }
+
+  return result;
+}
+
+INTERNAL void
+set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 value);
+{
+  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(world, abs_tile_x, abs_tile_y);
+  TileChunk *tile_chunk = get_tile_chunk(world, tile_chunk_pos.tile_chunk_x, 
+                                          tile_chunk_pos.tile_chunk_x);
+  ASSERT(tile_chunk != NULL);
+}
+
+
 // TODO(Ryan): Ensure game is procederal and rich in combinatorics
 extern "C" void
 hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buffer, 
                       HHFSoundBuffer *sound_buffer, HHFInput *input, HHFMemory *memory, 
                       HHFPlatform *platform)
 {
-  // BP(NULL);
-  /* TODO(Ryan): 
-   * Remove dependency on pixel as units of measurements 
-   * Remove inverted cartesian plane 
-  */
+   //BP(NULL);
+
   ASSERT(sizeof(State) <= memory->permanent_size);
 
   State *state = (State *)memory->permanent;
@@ -248,36 +300,60 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     state->player_pos.abs_tile_y = 4;
     state->player_pos.x = 5.0f;
     state->player_pos.y = 5.0f;
+
+    initialise_memory_arena(&state->world_arena, memory->permanent - sizeof(State),
+                             (u8 *)memory->permanent_size + sizeof(State));
+
+    state->world = reserve_struct(&state->world_arena, World);
+    World *world = state->world;
+    TileMap *tile_map = world->tile_map;
+    tile_map = reserve_struct(&state->world_arena, TileMap);
+    tile_map->chunks = reserve_array(TileChunk, tile_map->num_tile_chunks_x *
+                                                  tile_map->num_tile_chunks_y);
+
+    for (int y = 0; y < world->num_tile_chunks_y; ++y)
+    {
+      for (int x = 0; x < world->num_tile_chunks_x; ++x)
+      {
+        tile_map->chunks[y * tile_map->num_tile_chunks_x + x] = \
+            reserve_array(u32, tile_map->chunk_dim * tile_map->chunk_dim);
+      }
+    }
+
+    int num_tiles_x = 17;
+    int num_tiles_y = 9;
+    for (int screen_y = 0; screen_y < 32; screen_y++)
+    {
+      for (int screen_x = 0; screen_x < 32; screen_x++)
+      {
+        for (int tile_y = 0; tile_y < num_tiles_y; ++tile_y)
+        {
+          for (int tile_x = 0; tile_x < num_tiles_x; ++tile_x)
+          {
+            int abs_tile_x = screen_x * num_tiles_x + tile_x;
+            int abs_tile_y = screen_y * num_tiles_y + tile_y;
+            set_tile_value(world->tile_map, abs_tile_x, abs_tile_y, 
+                (x == y) && (x % 2) ? 1 : 0);
+          }
+        }
+      }
+    }
+    
     memory->is_initialized = true;
   }
 
 // IMPORTANT(Ryan): Drawing with y is going up. 
-  #define TILE_MAP_NUM_TILES_X 256
-  #define TILE_MAP_NUM_TILES_Y 256
-  u32 temp_tile_chunk[TILE_MAP_NUM_TILES_Y][TILE_MAP_NUM_TILES_X] =
-  {
-    {1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1},
-    {1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1},
-    {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 1},
-    {1, 1, 1, 1, 1, 1, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1},
-  };
-
 
   World world = {};
   world.chunk_shift = 8;
   world.chunk_mask = (1U << world.chunk_shift) - 1;
-  world.chunk_dim = 256;
+  world.chunk_dim = (1U << world.chunk_shift);
 
   TileChunk tile_chunk = {};
   tile_chunk.tiles = (u32 *)temp_tile_chunk;
   world.tile_chunks = &tile_chunk;
-  world.num_tile_chunks_x = 1;
-  world.num_tile_chunks_y = 1;
+  world.num_tile_chunks_x = 4;
+  world.num_tile_chunks_y = 4;
 
   world.tile_side_in_metres = 1.4f;
   world.tile_side_in_pixels = 75.0f;
@@ -289,8 +365,8 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   r32 player_width = 0.75f * world.tile_side_in_metres;
   r32 player_height = world.tile_side_in_metres;
 
-  r32 centre_x = back_buffer->width * 0.5f;
-  r32 centre_y = back_buffer->height * 0.5f;
+  r32 screen_centre_x = (r32)back_buffer->width * 0.5f;
+  r32 screen_centre_y = (r32)back_buffer->height * 0.5f;
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -315,8 +391,12 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         if (controller.action_up.ended_down) dplayer_y = 1.0f;
         if (controller.action_down.ended_down) dplayer_y = -1.0f;
 
-        dplayer_x *= 5.0f;
-        dplayer_y *= 5.0f;
+        r32 player_speed = 2.0f;
+
+        if (controller.move_down.ended_down) player_speed = 10.0f;
+
+        dplayer_x *= player_speed;
+        dplayer_y *= player_speed;
 
         WorldPosition test_player_pos = state->player_pos;
         test_player_pos.x += (dplayer_x * input->frame_dt);
@@ -358,20 +438,24 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       if (x == state->player_pos.abs_tile_x && 
             y == state->player_pos.abs_tile_y) grayscale = 0.0f;
 
-      r32 min_x = centre_x + ((r32)rel_x * world.tile_side_in_pixels);
-      r32 min_y = centre_y - ((r32)rel_y * world.tile_side_in_pixels);
-      r32 max_x = min_x + world.tile_side_in_pixels;
-      r32 max_y = min_y - world.tile_side_in_pixels;
+      // IMPORTANT(Ryan): Smooth scrolling acheived by drawing the map around the player,
+      // whilst keeping the player in the centre of the screen.
+      // Therefore, incorporate the player offset in the tile drawing
+      r32 centre_x = screen_centre_x - (world.tile_side_in_pixels * state->player_pos.x) + ((r32)rel_x * world.tile_side_in_pixels);
+      r32 centre_y = screen_centre_y + (world.tile_side_in_pixels * state->player_pos.y) - ((r32)rel_y * world.tile_side_in_pixels);
+      r32 min_x = centre_x - 0.5f * world.tile_side_in_pixels; 
+      r32 min_y = centre_y - 0.5f * world.tile_side_in_pixels; 
+      r32 max_x = centre_x + 0.5f * world.tile_side_in_pixels;
+      r32 max_y = centre_y + 0.5f * world.tile_side_in_pixels;
 
-      draw_rect(back_buffer, min_x, max_y, max_x, min_y, grayscale, grayscale, grayscale);
+      draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
     }
   }
 
 
-  r32 player_min_x = centre_x + (world.tile_side_in_pixels * state->player_pos.x) -
-                       (player_width * world.metres_to_pixels * 0.5f);
-  r32 player_min_y = centre_y - (world.tile_side_in_pixels * state->player_pos.y) -
-                       (player_height * world.metres_to_pixels);
-  draw_rect(back_buffer, player_min_x, player_min_y - player_height*world.metres_to_pixels, player_min_x + player_width*world.metres_to_pixels, 
-      player_min_y, player_r, player_g, player_b);
+  r32 player_min_x = screen_centre_x - (player_width * world.metres_to_pixels * 0.5f);
+  r32 player_min_y = screen_centre_y - (player_height * world.metres_to_pixels);
+  draw_rect(back_buffer, player_min_x, player_min_y, 
+            player_min_x + player_width*world.metres_to_pixels, 
+            player_min_y + player_height*world.metres_to_pixels, player_r, player_g, player_b);
 }
