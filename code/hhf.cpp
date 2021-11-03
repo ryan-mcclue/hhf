@@ -2,6 +2,8 @@
 
 #include "hhf.h"
 
+#include <time.h>
+
 struct TileChunk
 {
   u32 *tiles;
@@ -45,10 +47,42 @@ struct TileMapPosition
   r32 x_offset, y_offset;
 };
 
+struct MemoryArena
+{
+  u8 *base;
+  size_t size;
+  size_t used;
+};
+
+INTERNAL void
+initialise_memory_arena(MemoryArena *arena, size_t size, void *mem)
+{
+  arena->base = (u8 *)mem;
+  arena->size = size;
+  arena->used = 0;
+}
+
+#define MEMORY_RESERVE_STRUCT(arena, struct_name) \
+  (struct_name *)(obtain_mem(arena, sizeof(struct_name)))
+#define MEMORY_RESERVE_ARRAY(arena, len, elem) \
+  (elem *)(obtain_mem(arena, sizeof(elem) * (len)))
+
+INTERNAL void *
+obtain_mem(MemoryArena *arena, size_t size)
+{
+  void *result = NULL;
+  ASSERT(arena->used + size < arena->size);
+
+  result = (u8 *)arena->base + arena->used;
+  arena->used += size;
+
+  return result;
+}
+
 struct State
 {
   MemoryArena world_arena;
-  World world;
+  World *world;
 
   TileMapPosition player_pos;
 };
@@ -147,7 +181,7 @@ get_tile_chunk(TileMap *tile_map, int tile_chunk_x, int tile_chunk_y)
   if (tile_chunk_x >= 0 && tile_chunk_x < tile_map->num_tile_chunks_x && 
       tile_chunk_y >=0 && tile_chunk_y < tile_map->num_tile_chunks_y)
   {
-    result = &tile_map->tile_chunks[tile_chunk_y * tile_map->num_tile_chunks_x + tile_chunk_x];
+    result = &tile_map->chunks[tile_chunk_y * tile_map->num_tile_chunks_x + tile_chunk_x];
   }
 
   return result;
@@ -166,8 +200,8 @@ recanonicalise_coord(TileMap *tile_map, u32 *tile_coord, r32 *tile_rel)
 INTERNAL void
 recanonicalise_position(TileMap *tile_map, TileMapPosition *pos)
 {
-  recanonicalise_coord(tile_map, &pos->abs_tile_x, &pos->x);
-  recanonicalise_coord(tile_map, &pos->abs_tile_y, &pos->y);
+  recanonicalise_coord(tile_map, &pos->abs_tile_x, &pos->x_offset);
+  recanonicalise_coord(tile_map, &pos->abs_tile_y, &pos->y_offset);
 }
 
 INTERNAL TileChunkPosition
@@ -177,8 +211,8 @@ get_tile_chunk_position(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y)
 
   result.tile_chunk_x = abs_tile_x >> tile_map->chunk_shift;
   result.tile_chunk_y = abs_tile_y >> tile_map->chunk_shift;
-  result.rel_tile_x = abs_tile_x & tile_map->chunk_mask;
-  result.rel_tile_y = abs_tile_y & tile_map->chunk_mask;
+  result.tile_x = abs_tile_x & tile_map->chunk_mask;
+  result.tile_y = abs_tile_y & tile_map->chunk_mask;
 
   return result;
 }
@@ -214,8 +248,8 @@ get_tile_value(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y)
   TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y);
   TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
                                           tile_chunk_pos.tile_chunk_x);
-  result = get_tile_value(tile_map, tile_chunk, tile_chunk_pos.rel_tile_x, 
-                            tile_chunk_pos.rel_tile_y);
+  result = get_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, 
+                            tile_chunk_pos.tile_y);
   return result;
 }
 
@@ -232,58 +266,30 @@ is_tile_map_point_empty(TileMap *tile_map, TileMapPosition *pos)
   return result;
 }
 
-struct MemoryArena
-{
-  u8 *base;
-  size_t size;
-  size_t used;
-};
 
 INTERNAL void
-initialise_memory_arena(MemoryArena *arena, size_t size, void *mem)
-{
-  arena->base = mem;
-  arena->size = size;
-  arena->used = 0;
-}
-
-#define MEMORY_RESERVE_STRUCT(arena, struct) \
-  (struct *)(obtain_mem(arena, sizeof(struct)));
-#define MEMORY_RESERVE_ARRAY(arena, elem, len) \
-  (elem *)(obtain_mem(arena, sizeof(elem) * (len)));
-
-INTERNAL void *
-obtain_mem(MemoryArena *arena, size_t size)
-{
-  void *result = NULL;
-  ASSERT(arena->used + size < arena->size);
-
-  result = (u8 *)arena->base + arena->used;
-  arena->used += size;
-
-  return result;
-}
-
-INTERNAL void
-set_tile_value_unchecked(TileMap *tile_map, TileChunk *tile_chunk, int tile_x, int tile_y, u32 value)
+set_tile_value(TileMap *tile_map, TileChunk *tile_chunk, int tile_x, int tile_y, u32 value)
 {
   tile_chunk->tiles[tile_map->chunk_dim * tile_y + tile_x] = value;
 }
 
 INTERNAL void
-set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 value);
+set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 value)
 {
   TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y);
   TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
-                                          tile_chunk_pos.tile_chunk_x);
-  if (tile_chunk == NULL)
+                                         tile_chunk_pos.tile_chunk_x);
+  if (tile_chunk->tiles == NULL)
   {
     int tile_chunk_size = tile_map->chunk_dim * tile_map->chunk_dim;
-    tile_chunk->tiles = memory_reserve_array(arena, tile_chunk_size, u32);
+    tile_chunk->tiles = MEMORY_RESERVE_ARRAY(arena, tile_chunk_size, u32);
+    for (int tile_i = 0; tile_i < tile_chunk_size; ++tile_i)
+    {
+      tile_chunk->tiles[tile_i] = 1;
+    }
   }
 
-  set_tile_value_unchecked(tile_map, tile_chunk, tile_chunk_pos.tile_x,
-                           tile_chunk_pos.tile_y, value);
+  set_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, tile_chunk_pos.tile_y, value);
 }
 
 
@@ -300,26 +306,27 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   {
     state->player_pos.abs_tile_x = 4;
     state->player_pos.abs_tile_y = 4;
-    state->player_pos.x = 5.0f;
-    state->player_pos.y = 5.0f;
+    state->player_pos.x_offset = 5.0f;
+    state->player_pos.y_offset = 5.0f;
 
-    initialise_memory_arena(&state->world_arena, memory->permanent - sizeof(State),
+    initialise_memory_arena(&state->world_arena, memory->permanent_size - sizeof(State),
                              (u8 *)memory->permanent_size + sizeof(State));
 
-    state->world = memory_reserve_struct(&state->world_arena, World);
+    state->world = MEMORY_RESERVE_STRUCT(&state->world_arena, World);
     World *world = state->world;
 
-    world->tile_map = memory_reserve_struct(&state->world_arena, TileMap);
+    world->tile_map = MEMORY_RESERVE_STRUCT(&state->world_arena, TileMap);
     TileMap *tile_map = world->tile_map;
 
     tile_map->chunk_shift = 8;
-    tile_map->chunk_mask = (1U << world.chunk_shift) - 1;
-    tile_map->chunk_dim = (1U << world.chunk_shift);
+    tile_map->chunk_mask = (1U << tile_map->chunk_shift) - 1;
+    tile_map->chunk_dim = (1U << tile_map->chunk_shift);
     tile_map->num_tile_chunks_x = 4;
     tile_map->num_tile_chunks_y = 4;
     tile_map->tile_side_in_metres = 1.4f;
-    // NOTE(Ryan): For basic sparseness we allocate chunks when we write to them
-    tile_map->chunks = memory_reserve_struct(&state->world_arena, TileChunk);
+    // NOTE(Ryan): For basic sparseness we allocate chunk contents when we write to them
+    int tile_map_num_chunks = tile_map->num_tile_chunks_x * tile_map->num_tile_chunks_y;
+    tile_map->chunks = MEMORY_RESERVE_ARRAY(&state->world_arena, tile_map_num_chunks, TileChunk);
 
     srand(time(NULL));
     int num_tiles_screen_x = 17;
@@ -335,39 +342,42 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
           int abs_tile_x = screen_x * num_tiles_screen_x + tile_x;
           int abs_tile_y = screen_y * num_tiles_screen_y + tile_y;
 
-          u32 tile_value = 0;
+          u32 tile_value = 1;
           if (tile_x == 0 || tile_x == num_tiles_screen_x - 1) 
           {
-            if (tile_y != num_tiles_screen_y / 2) tile_value = 1;
+            if (tile_y != num_tiles_screen_y / 2) tile_value = 2;
           }
           if (tile_y == 0 || tile_y == num_tiles_screen_y - 1) 
           {
-            if (tile_x != num_tiles_screen_x / 2) tile_value = 1;
+            if (tile_x != num_tiles_screen_x / 2) tile_value = 2;
           }
 
-          set_tile_value(state->memory_arena, world->tile_map, abs_tile_x, abs_tile_y, 
+          set_tile_value(&state->world_arena, world->tile_map, abs_tile_x, abs_tile_y, 
                          tile_value);
         }
       }
       // NOTE(Ryan): Think of mod as choice range
-      if (rand() % 2 == 0) screen_x += 1 else screen_y += 1;
+      if (rand() % 2 == 0) screen_x += 1; else screen_y += 1;
     }
     
     memory->is_initialized = true;
   }
+
+  World *world = state->world;
+  TileMap *tile_map = world->tile_map;
 
   // IMPORTANT(Ryan): Drawing with y is going up. 
   r32 screen_centre_x = (r32)back_buffer->width * 0.5f;
   r32 screen_centre_y = (r32)back_buffer->height * 0.5f;
 
   r32 tile_side_in_pixels = 75.0f;
-  r32 metres_to_pixels = (r32)tile_map->tile_side_in_pixels / (r32)world.tile_side_in_metres;
+  r32 metres_to_pixels = (r32)tile_side_in_pixels / (r32)tile_map->tile_side_in_metres;
 
   r32 player_r = 0.5f;
   r32 player_g = 0.3f;
   r32 player_b = 1.0f;
-  r32 player_width = 0.75f * tile_side_in_metres;
-  r32 player_height = tile_side_in_metres;
+  r32 player_width = 0.75f * tile_map->tile_side_in_metres;
+  r32 player_height = tile_map->tile_side_in_metres;
 
   // counting how many half transition counts over say half a second gives us
   // whether the user 'dashed'
@@ -399,23 +409,23 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         dplayer_x *= player_speed;
         dplayer_y *= player_speed;
 
-        WorldPosition test_player_pos = state->player_pos;
-        test_player_pos.x += (dplayer_x * input->frame_dt);
-        test_player_pos.y += (dplayer_y * input->frame_dt); 
-        recanonicalise_position(&world, &test_player_pos);
+        TileMapPosition test_player_pos = state->player_pos;
+        test_player_pos.x_offset += (dplayer_x * input->frame_dt);
+        test_player_pos.y_offset += (dplayer_y * input->frame_dt); 
+        recanonicalise_position(tile_map, &test_player_pos);
 
-        WorldPosition player_left_pos = test_player_pos;
-        player_left_pos.x -= (0.5f * player_width);
-        recanonicalise_position(&world, &player_left_pos);
+        TileMapPosition player_left_pos = test_player_pos;
+        player_left_pos.x_offset -= (0.5f * player_width);
+        recanonicalise_position(tile_map, &player_left_pos);
 
-        WorldPosition player_right_pos = test_player_pos;
-        player_right_pos.x += (0.5f * player_width);
-        recanonicalise_position(&world, &player_right_pos);
+        TileMapPosition player_right_pos = test_player_pos;
+        player_right_pos.x_offset += (0.5f * player_width);
+        recanonicalise_position(tile_map, &player_right_pos);
 
         // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
-        bool is_tile_valid = is_world_point_empty(&world, &test_player_pos) &&
-          is_world_point_empty(&world, &player_left_pos) && 
-          is_world_point_empty(&world, &player_right_pos);
+        bool is_tile_valid = is_tile_map_point_empty(tile_map, &test_player_pos) &&
+          is_tile_map_point_empty(tile_map, &player_left_pos) && 
+          is_tile_map_point_empty(tile_map, &player_right_pos);
 
         if (is_tile_valid) state->player_pos = test_player_pos;
 
@@ -432,7 +442,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     {
       u32 y = state->player_pos.abs_tile_y + rel_y;
       u32 x = state->player_pos.abs_tile_x + rel_x;
-      u32 tile_id = get_tile_value(&world, x, y);
+      u32 tile_id = get_tile_value(tile_map, x, y);
       // TODO(Ryan): 0 is not defined, 1 is walkable, 2 is wall
       if (tile_id > 0)
       {
@@ -445,12 +455,12 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         // IMPORTANT(Ryan): Smooth scrolling acheived by drawing the map around the player,
         // whilst keeping the player in the centre of the screen.
         // Therefore, incorporate the player offset in the tile drawing
-        r32 centre_x = screen_centre_x - (world.tile_side_in_pixels * state->player_pos.x) + ((r32)rel_x * world.tile_side_in_pixels);
-        r32 centre_y = screen_centre_y + (world.tile_side_in_pixels * state->player_pos.y) - ((r32)rel_y * world.tile_side_in_pixels);
-        r32 min_x = centre_x - 0.5f * world.tile_side_in_pixels; 
-        r32 min_y = centre_y - 0.5f * world.tile_side_in_pixels; 
-        r32 max_x = centre_x + 0.5f * world.tile_side_in_pixels;
-        r32 max_y = centre_y + 0.5f * world.tile_side_in_pixels;
+        r32 centre_x = screen_centre_x - (tile_side_in_pixels * state->player_pos.x_offset) + ((r32)rel_x * tile_side_in_pixels);
+        r32 centre_y = screen_centre_y + (tile_side_in_pixels * state->player_pos.y_offset) - ((r32)rel_y * tile_side_in_pixels);
+        r32 min_x = centre_x - 0.5f * tile_side_in_pixels; 
+        r32 min_y = centre_y - 0.5f * tile_side_in_pixels; 
+        r32 max_x = centre_x + 0.5f * tile_side_in_pixels;
+        r32 max_y = centre_y + 0.5f * tile_side_in_pixels;
 
         draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
       }
@@ -458,9 +468,9 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   }
 
 
-  r32 player_min_x = screen_centre_x - (player_width * world.metres_to_pixels * 0.5f);
-  r32 player_min_y = screen_centre_y - (player_height * world.metres_to_pixels);
+  r32 player_min_x = screen_centre_x - (player_width * metres_to_pixels * 0.5f);
+  r32 player_min_y = screen_centre_y - (player_height * metres_to_pixels);
   draw_rect(back_buffer, player_min_x, player_min_y, 
-            player_min_x + player_width*world.metres_to_pixels, 
-            player_min_y + player_height*world.metres_to_pixels, player_r, player_g, player_b);
+            player_min_x + player_width*metres_to_pixels, 
+            player_min_y + player_height*metres_to_pixels, player_r, player_g, player_b);
 }
