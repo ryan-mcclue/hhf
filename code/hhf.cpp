@@ -13,6 +13,8 @@ struct TileChunkPosition
 {
   u32 tile_chunk_x;
   u32 tile_chunk_y;
+  u32 tile_chunk_z;
+
   u32 tile_x;
   u32 tile_y;
 };
@@ -27,6 +29,7 @@ struct TileMap
 
   int num_tile_chunks_x;
   int num_tile_chunks_y;
+  int num_tile_chunks_z;
 
   TileChunk *chunks;
 };
@@ -40,6 +43,7 @@ struct TileMapPosition
 {
   u32 abs_tile_x;
   u32 abs_tile_y;
+  u32 abs_tile_z;
 
 // IMPORTANT(Ryan): We want at least 8bits for sub-pixel positioning to perform anti-aliasing
 // Therefore, only using r32 does not have enough data in mantissa for a large world
@@ -62,6 +66,7 @@ initialise_memory_arena(MemoryArena *arena, size_t size, void *mem)
   arena->used = 0;
 }
 
+// NOTE(Ryan): Generally use #defines over globals for flexibility in debug code
 #define MEMORY_RESERVE_STRUCT(arena, struct_name) \
   (struct_name *)(obtain_mem(arena, sizeof(struct_name)))
 #define MEMORY_RESERVE_ARRAY(arena, len, elem) \
@@ -174,14 +179,18 @@ draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32
 }
 
 INTERNAL TileChunk *
-get_tile_chunk(TileMap *tile_map, int tile_chunk_x, int tile_chunk_y)
+get_tile_chunk(TileMap *tile_map, int tile_chunk_x, int tile_chunk_y, int tile_chunk_z)
 {
   TileChunk *result = NULL;
 
   if (tile_chunk_x >= 0 && tile_chunk_x < tile_map->num_tile_chunks_x && 
-      tile_chunk_y >=0 && tile_chunk_y < tile_map->num_tile_chunks_y)
+      tile_chunk_y >=0 && tile_chunk_y < tile_map->num_tile_chunks_y &&
+      tile_chunk_z >=0 && tile_chunk_z < tile_map->num_tile_chunks_z)
   {
-    result = &tile_map->chunks[tile_chunk_y * tile_map->num_tile_chunks_x + tile_chunk_x];
+    result = &tile_map->chunks[
+               tile_chunk_z * tile_map->num_tile_chunks_y * tile_map->num_tile_chunks_x + 
+               tile_chunk_y * tile_map->num_tile_chunks_x + 
+               tile_chunk_x];
   }
 
   return result;
@@ -205,12 +214,13 @@ recanonicalise_position(TileMap *tile_map, TileMapPosition *pos)
 }
 
 INTERNAL TileChunkPosition
-get_tile_chunk_position(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y)
+get_tile_chunk_position(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z)
 {
   TileChunkPosition result = {};
 
   result.tile_chunk_x = abs_tile_x >> tile_map->chunk_shift;
   result.tile_chunk_y = abs_tile_y >> tile_map->chunk_shift;
+  result.tile_chunk_z = abs_tile_z;
   result.tile_x = abs_tile_x & tile_map->chunk_mask;
   result.tile_y = abs_tile_y & tile_map->chunk_mask;
 
@@ -241,15 +251,17 @@ get_tile_value(TileMap *tile_map, TileChunk *tile_chunk, u32 tile_x, u32 tile_y)
 }
 
 INTERNAL u32
-get_tile_value(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y)
+get_tile_value(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z)
 {
   u32 result = 0;
 
-  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y);
+  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y,
+                                                             abs_tile_z);
   TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
-                                          tile_chunk_pos.tile_chunk_x);
-  result = get_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, 
-                            tile_chunk_pos.tile_y);
+                                          tile_chunk_pos.tile_chunk_y,
+                                          tile_chunk_pos.tile_chunk_z);
+  result = get_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, tile_chunk_pos.tile_y);
+
   return result;
 }
 
@@ -260,7 +272,7 @@ is_tile_map_point_empty(TileMap *tile_map, TileMapPosition *pos)
 {
   bool result = false;
 
-  u32 tile_value = get_tile_value(tile_map, pos->abs_tile_x, pos->abs_tile_y);
+  u32 tile_value = get_tile_value(tile_map, pos->abs_tile_x, pos->abs_tile_y, pos->abs_tile_z);
   result = (tile_value == 1);
 
   return result;
@@ -274,11 +286,14 @@ set_tile_value(TileMap *tile_map, TileChunk *tile_chunk, int tile_x, int tile_y,
 }
 
 INTERNAL void
-set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 value)
+set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, 
+               u32 abs_tile_z, u32 value)
 {
-  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y);
+  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y, 
+                                                             abs_tile_z);
   TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
-                                         tile_chunk_pos.tile_chunk_x);
+                                         tile_chunk_pos.tile_chunk_y, 
+                                         tile_chunk_pos.tile_chunk_z);
   ASSERT(tile_chunk != NULL);
 
   if (tile_chunk->tiles == NULL)
@@ -325,9 +340,11 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     tile_map->chunk_dim = (1U << tile_map->chunk_shift);
     tile_map->num_tile_chunks_x = 4;
     tile_map->num_tile_chunks_y = 4;
+    tile_map->num_tile_chunks_z = 2;
     tile_map->tile_side_in_metres = 1.4f;
     // NOTE(Ryan): For basic sparseness we allocate chunk contents when we write to them
-    int tile_map_num_chunks = tile_map->num_tile_chunks_x * tile_map->num_tile_chunks_y;
+    int tile_map_num_chunks = tile_map->num_tile_chunks_x * tile_map->num_tile_chunks_y *
+                              tile_map->num_tile_chunks_z;
     tile_map->chunks = MEMORY_RESERVE_ARRAY(&state->world_arena, tile_map_num_chunks, TileChunk);
 
     srand(time(NULL));
@@ -343,22 +360,27 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         {
           int abs_tile_x = screen_x * num_tiles_screen_x + tile_x;
           int abs_tile_y = screen_y * num_tiles_screen_y + tile_y;
+          int abs_tile_z = 0;
 
           u32 tile_value = 1;
           if (tile_x == 0 || tile_x == num_tiles_screen_x - 1) 
           {
+            // NOTE(Ryan): Although de morgan's laws could be used to reduce the number of
+            // boolean expressions, often best to make clear linguistically
             if (tile_y != num_tiles_screen_y / 2) tile_value = 2;
           }
           if (tile_y == 0 || tile_y == num_tiles_screen_y - 1) 
           {
             if (tile_x != num_tiles_screen_x / 2) tile_value = 2;
           }
+          if (tile_x == 6 && tile_y == 3) tile_value = 3;
 
-          set_tile_value(&state->world_arena, world->tile_map, abs_tile_x, abs_tile_y, 
-                         tile_value);
+          set_tile_value(&state->world_arena, world->tile_map, abs_tile_x, abs_tile_y,
+                         abs_tile_z, tile_value);
         }
       }
       // NOTE(Ryan): Think of mod as choice range
+      int random_index = rand() % 2;
       if (rand() % 2 == 0) screen_x += 1; else screen_y += 1;
     }
     
@@ -369,6 +391,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   TileMap *tile_map = world->tile_map;
 
   // IMPORTANT(Ryan): Drawing with y is going up. 
+  // Compute y with negative and reorder min max in draw rect
   r32 screen_centre_x = (r32)back_buffer->width * 0.5f;
   r32 screen_centre_y = (r32)back_buffer->height * 0.5f;
 
@@ -444,12 +467,14 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     {
       u32 y = state->player_pos.abs_tile_y + rel_y;
       u32 x = state->player_pos.abs_tile_x + rel_x;
-      u32 tile_id = get_tile_value(tile_map, x, y);
+      u32 z = state->player_pos.abs_tile_z;
+      u32 tile_id = get_tile_value(tile_map, x, y, z);
       // TODO(Ryan): 0 is not defined, 1 is walkable, 2 is wall
       if (tile_id > 0)
       {
         r32 whitescale = 0.5f;
         if (tile_id == 2) whitescale = 1.0f;
+        if (tile_id == 3) whitescale = 0.25f;
 
         if (x == state->player_pos.abs_tile_x && 
               y == state->player_pos.abs_tile_y) whitescale = 0.0f;
