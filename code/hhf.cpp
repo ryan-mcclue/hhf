@@ -265,7 +265,33 @@ get_tile_value(TileMap *tile_map, u32 abs_tile_x, u32 abs_tile_y, u32 abs_tile_z
   return result;
 }
 
+INTERNAL u32
+get_tile_value(TileMap *tile_map, TileMapPosition *pos)
+{
+  u32 result = 0;
 
+  TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, pos->abs_tile_x, 
+                                                             pos->abs_tile_y,
+                                                             pos->abs_tile_z);
+  TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
+                                          tile_chunk_pos.tile_chunk_y,
+                                          tile_chunk_pos.tile_chunk_z);
+  result = get_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, tile_chunk_pos.tile_y);
+
+  return result;
+}
+
+INTERNAL bool
+are_on_same_tile(TileMapPosition *pos1, TileMapPosition *pos2)
+{
+  bool result = false;
+
+  result = (pos1->abs_tile_x == pos2->abs_tile_x && 
+            pos1->abs_tile_y == pos2->abs_tile_y && 
+            pos1->abs_tile_z == pos2->abs_tile_z);
+
+  return result;
+}
  
 INTERNAL bool
 is_tile_map_point_empty(TileMap *tile_map, TileMapPosition *pos)
@@ -273,7 +299,7 @@ is_tile_map_point_empty(TileMap *tile_map, TileMapPosition *pos)
   bool result = false;
 
   u32 tile_value = get_tile_value(tile_map, pos->abs_tile_x, pos->abs_tile_y, pos->abs_tile_z);
-  result = (tile_value == 1);
+  result = (tile_value == 1 || tile_value == 3 || tile_value == 4);
 
   return result;
 }
@@ -352,15 +378,25 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     int num_tiles_screen_y = 9;
     int screen_x = 0;
     int screen_y = 0;
+    int abs_tile_z = 0;
+    bool want_door = false;
+    bool have_drawn_door = false;
+    int random_index = 0;
+
     for (int screen_i = 0; screen_i < 100; screen_i++)
     {
+      // NOTE(Ryan): Think of mod as choice range
+      if (have_drawn_door) random_index = rand() % 2;
+      else random_index = rand() % 3;
+
+      if (random_index == 2) want_door = true;
+
       for (int tile_y = 0; tile_y < num_tiles_screen_y; ++tile_y)
       {
         for (int tile_x = 0; tile_x < num_tiles_screen_x; ++tile_x)
         {
           int abs_tile_x = screen_x * num_tiles_screen_x + tile_x;
           int abs_tile_y = screen_y * num_tiles_screen_y + tile_y;
-          int abs_tile_z = 0;
 
           u32 tile_value = 1;
           if (tile_x == 0 || tile_x == num_tiles_screen_x - 1) 
@@ -373,15 +409,48 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
           {
             if (tile_x != num_tiles_screen_x / 2) tile_value = 2;
           }
-          if (tile_x == 6 && tile_y == 3) tile_value = 3;
+          if (tile_x == 6 && tile_y == 3)
+          {
+            if (want_door)
+            {
+              if (abs_tile_z == 0) tile_value = 3;
+              else tile_value = 4;
+            }
+            if (have_drawn_door)
+            {
+              if (abs_tile_z == 1) tile_value = 4;
+              else tile_value = 3;
+            }
+          }
 
           set_tile_value(&state->world_arena, world->tile_map, abs_tile_x, abs_tile_y,
                          abs_tile_z, tile_value);
         }
       }
-      // NOTE(Ryan): Think of mod as choice range
-      int random_index = rand() % 2;
-      if (rand() % 2 == 0) screen_x += 1; else screen_y += 1;
+
+      if (random_index == 1)
+      {
+        screen_x += 1;
+      }
+      if (random_index == 2)
+      {
+        screen_y += 1;
+      }
+      if (have_drawn_door)
+      {
+        have_drawn_door = false;
+
+        if (abs_tile_z == 0) abs_tile_z = 1;
+        else abs_tile_z = 0;
+      }
+      if (want_door)
+      {
+        want_door = false;
+        have_drawn_door = true;
+
+        if (abs_tile_z == 0) abs_tile_z = 1;
+        else abs_tile_z = 0;
+      }
     }
     
     memory->is_initialized = true;
@@ -448,11 +517,27 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         recanonicalise_position(tile_map, &player_right_pos);
 
         // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
-        bool is_tile_valid = is_tile_map_point_empty(tile_map, &test_player_pos) &&
+        bool tile_is_valid = is_tile_map_point_empty(tile_map, &test_player_pos) &&
           is_tile_map_point_empty(tile_map, &player_left_pos) && 
           is_tile_map_point_empty(tile_map, &player_right_pos);
 
-        if (is_tile_valid) state->player_pos = test_player_pos;
+        if (tile_is_valid) 
+        {
+          if (!are_on_same_tile(&state->player_pos, &test_player_pos))
+          {
+            u32 new_tile_value = get_tile_value(tile_map, &test_player_pos);
+            if (new_tile_value == 3)
+            {
+              test_player_pos.abs_tile_z += 1;
+            }
+            if (new_tile_value == 4)
+            {
+              test_player_pos.abs_tile_z -= 1;
+            }
+          }
+
+          state->player_pos = test_player_pos;
+        }
 
       }
 
@@ -474,7 +559,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       {
         r32 whitescale = 0.5f;
         if (tile_id == 2) whitescale = 1.0f;
-        if (tile_id == 3) whitescale = 0.25f;
+        if (tile_id == 3 || tile_id == 4) whitescale = 0.25f;
 
         if (x == state->player_pos.abs_tile_x && 
               y == state->player_pos.abs_tile_y) whitescale = 0.0f;
