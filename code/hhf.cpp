@@ -65,7 +65,7 @@ initialise_memory_arena(MemoryArena *arena, size_t size, void *mem)
 #define MEMORY_RESERVE_STRUCT(arena, struct_name) \
   (struct_name *)(obtain_mem(arena, sizeof(struct_name)))
 #define MEMORY_RESERVE_ARRAY(arena, len, elem) \
-  (elem *)(obtain_mem(arena, sizeof(elem) * (len)))
+  (elem *)(obtain_mem(arena, (len) * sizeof(elem)))
 
 INTERNAL void *
 obtain_mem(MemoryArena *arena, size_t size)
@@ -261,7 +261,7 @@ is_tile_map_point_empty(TileMap *tile_map, TileMapPosition *pos)
   bool result = false;
 
   u32 tile_value = get_tile_value(tile_map, pos->abs_tile_x, pos->abs_tile_y);
-  result = (tile_value == 0);
+  result = (tile_value == 1);
 
   return result;
 }
@@ -279,6 +279,8 @@ set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_ti
   TileChunkPosition tile_chunk_pos = get_tile_chunk_position(tile_map, abs_tile_x, abs_tile_y);
   TileChunk *tile_chunk = get_tile_chunk(tile_map, tile_chunk_pos.tile_chunk_x, 
                                          tile_chunk_pos.tile_chunk_x);
+  ASSERT(tile_chunk != NULL);
+
   if (tile_chunk->tiles == NULL)
   {
     int tile_chunk_size = tile_map->chunk_dim * tile_map->chunk_dim;
@@ -304,13 +306,13 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
-    state->player_pos.abs_tile_x = 4;
-    state->player_pos.abs_tile_y = 4;
+    state->player_pos.abs_tile_x = 3;
+    state->player_pos.abs_tile_y = 3;
     state->player_pos.x_offset = 5.0f;
     state->player_pos.y_offset = 5.0f;
 
     initialise_memory_arena(&state->world_arena, memory->permanent_size - sizeof(State),
-                             (u8 *)memory->permanent_size + sizeof(State));
+                             (u8 *)memory->permanent + sizeof(State));
 
     state->world = MEMORY_RESERVE_STRUCT(&state->world_arena, World);
     World *world = state->world;
@@ -446,23 +448,25 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       // TODO(Ryan): 0 is not defined, 1 is walkable, 2 is wall
       if (tile_id > 0)
       {
-        r32 grayscale = 0.5f;
-        if (tile_id == 2) grayscale = 1.0f;
+        r32 whitescale = 0.5f;
+        if (tile_id == 2) whitescale = 1.0f;
 
         if (x == state->player_pos.abs_tile_x && 
-              y == state->player_pos.abs_tile_y) grayscale = 0.0f;
+              y == state->player_pos.abs_tile_y) whitescale = 0.0f;
 
         // IMPORTANT(Ryan): Smooth scrolling acheived by drawing the map around the player,
         // whilst keeping the player in the centre of the screen.
         // Therefore, incorporate the player offset in the tile drawing
-        r32 centre_x = screen_centre_x - (tile_side_in_pixels * state->player_pos.x_offset) + ((r32)rel_x * tile_side_in_pixels);
-        r32 centre_y = screen_centre_y + (tile_side_in_pixels * state->player_pos.y_offset) - ((r32)rel_y * tile_side_in_pixels);
+        r32 centre_x = screen_centre_x - (metres_to_pixels*state->player_pos.x_offset) +
+                        ((r32)rel_x * tile_side_in_pixels);
+        r32 centre_y = screen_centre_y + (metres_to_pixels*state->player_pos.y_offset) -
+                        ((r32)rel_y * tile_side_in_pixels);
         r32 min_x = centre_x - 0.5f * tile_side_in_pixels; 
         r32 min_y = centre_y - 0.5f * tile_side_in_pixels; 
         r32 max_x = centre_x + 0.5f * tile_side_in_pixels;
         r32 max_y = centre_y + 0.5f * tile_side_in_pixels;
 
-        draw_rect(back_buffer, min_x, min_y, max_x, max_y, grayscale, grayscale, grayscale);
+        draw_rect(back_buffer, min_x, min_y, max_x, max_y, whitescale, whitescale, whitescale);
       }
     }
   }
