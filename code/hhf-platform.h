@@ -126,9 +126,10 @@ typedef struct HHFPlatformReadFileResult
   int errno_code;
 } HHFPlatformReadFileResult;
 
+typedef HHFPlatformReadFileResult (*hhf_read_entire_file)(HHFThreadContext *thread, char *file_name);
 typedef struct HHFPlatform
 {
-  HHFPlatformReadFileResult (*read_entire_file)(HHFThreadContext *thread, char *file_name);
+  hhf_read_entire_file read_entire_file;
   void (*free_read_file_result)(HHFThreadContext *thread, HHFPlatformReadFileResult *read_result);
   int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, u64 size);
 } HHFPlatform;

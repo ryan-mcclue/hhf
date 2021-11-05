@@ -84,10 +84,22 @@ obtain_mem(MemoryArena *arena, size_t size)
   return result;
 }
 
+struct LoadedBitmap
+{
+  int width;
+  int height;
+  u32 *pixels;
+};
+
 struct State
 {
   MemoryArena world_arena;
   World *world;
+
+  LoadedBitmap backdrop;
+  LoadedBitmap player_head;
+  LoadedBitmap player_torso;
+  LoadedBitmap player_legs;
 
   TileMapPosition player_pos;
 };
@@ -335,6 +347,92 @@ set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_ti
   set_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, tile_chunk_pos.tile_y, value);
 }
 
+struct BitmapHeader
+{
+  // TODO(Ryan): Will pack to largest size in struct?
+  u16 signature;
+  u32 file_size;
+  u32 reserved;
+  u32 data_offset;
+  u32 size;
+  u32 width;
+  u32 height;
+  u16 planes;
+  u16 bits_per_pixel;
+  u32 compression;
+  u32 size_of_bitmap;
+  u32 horz_resolution;
+  u32 vert_resolution;
+  u32 colors_used;
+  u32 colors_important;
+
+  u32 red_mask;
+  u32 green_mask;
+  u32 blue_mask;
+} __attribute__((packed));
+
+
+INTERNAL void
+draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y)
+{
+  int min_x = roundf(x);
+  if (min_x < 0) min_x = 0;
+  int min_y = roundf(y);
+  if (min_y < 0) min_y = 0;
+
+  int blit_width = bitmap->width;
+  int blit_height = bitmap->height;
+  if (x + blit_width > back_buffer->width) blit_width = back_buffer->width;
+  if (y + blit_height > back_buffer->height) blit_height = back_buffer->height;
+
+  // TODO(Ryan): Account for clipping here
+  u8 *bitmap_row = (u8 *)bitmap->pixels + ((pixel_width * (pixel_height - 1)) * 4);
+  u8 *buffer_row = back_buffer->memory;
+  for (int y = 0; y < blit_height; ++y)
+  {
+    u32 *buffer_cursor = (u32 *)buffer_row;
+    u32 *pixel_cursor = (u32 *)pixel_row;
+    for (int x = 0; x < blit_width; ++x)
+    {
+      *buffer_cursor++ = *pixel_cursor++;
+    }
+    buffer_row += (back_buffer->width * 4);
+    pixel_row -= (pixel_width * 4);
+  }
+}
+
+// TODO(Ryan): PNG RLE may not help us as our graphics are painterly?
+INTERNAL LoadedBitmap 
+load_bmp(HHFThreadContext *thread, hhf_read_entire_file read_entire_file, char *filename)
+{
+  LoadedBitmap result = {};
+
+  HHFPlatformReadFileResult read_result = read_entire_file(thread, filename);
+  if (read_result.errno_code == 0)
+  {
+    BitmapHeader *bitmap_header = (BitmapHeader *)read_result.contents;
+    result.pixels = (u32 *)((u8 *)bitmap_header + bitmap_header->data_offset);
+
+    // IMPORTANT(Ryan): BMPs can go top-down and have compression. This just handles
+    // BMPs we create
+    
+    // NOTE(Ryan): We determined bottom-up and byte order with structured art
+    u32 *pixels = result.pixels;
+    for (uint y = 0; y < bitmap_header->height; ++y)
+    {
+      for (uint x = 0; x < bitmap_header->width; ++x)
+      {
+        *pixels = (*pixels >> 8) | (*pixels << 24); 
+        pixels++;
+      }
+    }
+
+    result.width = bitmap_header->width;
+    result.height = bitmap_header->height;
+  }
+
+  return result;
+}
 
 // TODO(Ryan): Ensure game is procederal and rich in combinatorics
 extern "C" void
@@ -347,6 +445,11 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
+    state->backdrop = load_bmp(thread_context, platform->read_entire_file, "test/test_background.bmp");
+    state->player_head = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_head.bmp");
+    state->player_torso = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_cape.bmp");
+    state->player_legs = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_torso.bmp");
+
     state->player_pos.abs_tile_x = 3;
     state->player_pos.abs_tile_y = 3;
     state->player_pos.x_offset = 5.0f;
@@ -555,7 +658,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       u32 z = state->player_pos.abs_tile_z;
       u32 tile_id = get_tile_value(tile_map, x, y, z);
       // TODO(Ryan): 0 is not defined, 1 is walkable, 2 is wall
-      if (tile_id > 0)
+      if (tile_id > 1)
       {
         r32 whitescale = 0.5f;
         if (tile_id == 2) whitescale = 1.0f;
@@ -587,4 +690,5 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   draw_rect(back_buffer, player_min_x, player_min_y, 
             player_min_x + player_width*metres_to_pixels, 
             player_min_y + player_height*metres_to_pixels, player_r, player_g, player_b);
+
 }
