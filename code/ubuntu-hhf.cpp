@@ -982,8 +982,8 @@ main(int argc, char *argv[])
   // TODO(Ryan): For shipping, want 1920 x 1080 x 60Hz
   // For software, 1/8 so 960 x 540 x 30Hz
   // We want power of 2 textures for GPU
-  int xlib_back_buffer_width = 1280;
-  int xlib_back_buffer_height = 720;
+  int xlib_back_buffer_width = 960;
+  int xlib_back_buffer_height = 540;
   XlibBackBuffer xlib_back_buffer = \
     xlib_create_back_buffer(xlib_display, xlib_visual_info, xlib_window,
                             xlib_window_width, xlib_window_height,

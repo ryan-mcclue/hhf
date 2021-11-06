@@ -386,18 +386,39 @@ draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y)
   if (y + blit_height > back_buffer->height) blit_height = back_buffer->height;
 
   // TODO(Ryan): Account for clipping here
-  u8 *bitmap_row = (u8 *)bitmap->pixels + ((pixel_width * (pixel_height - 1)) * 4);
+  u8 *bitmap_row = (u8 *)bitmap->pixels + ((bitmap->width * (bitmap->height - 1)) * 4);
   u8 *buffer_row = back_buffer->memory;
   for (int y = 0; y < blit_height; ++y)
   {
     u32 *buffer_cursor = (u32 *)buffer_row;
-    u32 *pixel_cursor = (u32 *)pixel_row;
+    u32 *pixel_cursor = (u32 *)bitmap_row;
+
     for (int x = 0; x < blit_width; ++x)
     {
-      *buffer_cursor++ = *pixel_cursor++;
+      // NOTE(Ryan): 1. Alpha test has a cut-off threshold
+      // 2. Alpha linear blend with background
+      r32 alpha_blend_t = (*pixel_cursor >> 24) / 255.0f;
+      
+      r32 red_orig = (*buffer_cursor >> 16 & 0xFF);
+      r32 new_red = (*pixel_cursor >> 16 & 0xFF);
+      r32 red_blended = red_orig + alpha_blend_t * (new_red - red_orig);
+
+      r32 green_orig = (*buffer_cursor >> 8 & 0xFF);
+      r32 new_green = (*pixel_cursor >> 8 & 0xFF);
+      r32 green_blended = green_orig + alpha_blend_t * (new_green - green_orig);
+
+      r32 blue_orig = (*buffer_cursor >> 0 & 0xFF);
+      r32 new_blue = (*pixel_cursor >> 0 & 0xFF);
+      r32 blue_blended = blue_orig + alpha_blend_t * (new_blue - blue_orig);
+
+      pixel_cursor++;
+      *buffer_cursor++ = (u32)roundf(red_blended) << 16 | 
+                         (u32)roundf(green_blended) << 8 | 
+                         (u32)roundf(blue_blended) << 0; 
     }
+
     buffer_row += (back_buffer->width * 4);
-    pixel_row -= (pixel_width * 4);
+    bitmap_row -= (bitmap->width * 4);
   }
 }
 
@@ -415,6 +436,15 @@ load_bmp(HHFThreadContext *thread, hhf_read_entire_file read_entire_file, char *
 
     // IMPORTANT(Ryan): BMPs can go top-down and have compression. This just handles
     // BMPs we create
+    u32 red_mask = bitmap_header->red_mask;
+    u32 green_mask = bitmap_header->green_mask;
+    u32 blue_mask = bitmap_header->blue_mask;
+    u32 alpha_mask = ~(red_mask | green_mask | blue_mask);
+
+    u32 red_shift = __builtin_ctz(red_mask);
+    u32 green_shift = __builtin_ctz(green_mask);
+    u32 blue_shift = __builtin_ctz(blue_mask);
+    u32 alpha_shift = __builtin_ctz(alpha_mask);
     
     // NOTE(Ryan): We determined bottom-up and byte order with structured art
     u32 *pixels = result.pixels;
@@ -422,7 +452,11 @@ load_bmp(HHFThreadContext *thread, hhf_read_entire_file read_entire_file, char *
     {
       for (uint x = 0; x < bitmap_header->width; ++x)
       {
-        *pixels = (*pixels >> 8) | (*pixels << 24); 
+        // NOTE(Ryan): This reordering is also known as swizzling
+        *pixels = (((*pixels >> alpha_shift) & 0xFF) << 24) |
+                  (((*pixels >> red_shift) & 0xFF) << 16) |
+                  (((*pixels >> green_shift) & 0xFF) << 8) |
+                  (((*pixels >> blue_shift) & 0xFF) << 0);
         pixels++;
       }
     }
@@ -647,7 +681,9 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     }
   }
 
-  draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
+  draw_bmp(back_buffer, &state->backdrop, 0.0f, 0.0f); 
+
+  // draw_rect(back_buffer, 0, 0, back_buffer->width, back_buffer->height, 1.0f, 0.0f, 1.0f);
 
   for (int rel_y = -10; rel_y < 10; ++rel_y)
   {
@@ -690,5 +726,6 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   draw_rect(back_buffer, player_min_x, player_min_y, 
             player_min_x + player_width*metres_to_pixels, 
             player_min_y + player_height*metres_to_pixels, player_r, player_g, player_b);
+  draw_bmp(back_buffer, &state->player_head, player_min_x, player_min_y); 
 
 }
