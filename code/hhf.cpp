@@ -4,6 +4,13 @@
 
 #include <time.h>
 
+struct TileMapDifference
+{
+  r32 dx;
+  r32 dy;
+  r32 dz;
+};
+
 struct TileChunk
 {
   u32 *tiles;
@@ -91,17 +98,25 @@ struct LoadedBitmap
   u32 *pixels;
 };
 
+struct PlayerBitmap
+{
+  int align_x, align_y;
+  LoadedBitmap head;
+  LoadedBitmap torso;
+  LoadedBitmap legs;
+};
+
 struct State
 {
   MemoryArena world_arena;
   World *world;
 
   LoadedBitmap backdrop;
-  LoadedBitmap player_head;
-  LoadedBitmap player_torso;
-  LoadedBitmap player_legs;
+  PlayerBitmap player_bitmaps[4];
+  int player_facing_direction;
 
   TileMapPosition player_pos;
+  TileMapPosition camera_pos;
 };
 
 #if 0
@@ -189,6 +204,7 @@ draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32
   }
 
 }
+
 
 INTERNAL TileChunk *
 get_tile_chunk(TileMap *tile_map, int tile_chunk_x, int tile_chunk_y, int tile_chunk_z)
@@ -347,6 +363,25 @@ set_tile_value(MemoryArena *arena, TileMap *tile_map, u32 abs_tile_x, u32 abs_ti
   set_tile_value(tile_map, tile_chunk, tile_chunk_pos.tile_x, tile_chunk_pos.tile_y, value);
 }
 
+INTERNAL TileMapDifference
+subtract(TileMap *tile_map, TileMapPosition *pos1, TileMapPosition *pos2)
+{
+  TileMapDifference result = {};
+
+  // IMPORTANT(Ryan): Best to use explicit casts when working with floating point to handle
+  // cases where working with unsigned may wrap around
+  r32 dtile_x = (r32)pos1->abs_tile_x - (r32)pos2->abs_tile_x;  
+  r32 dtile_y = (r32)pos1->abs_tile_y - (r32)pos2->abs_tile_y;  
+  r32 dtile_z = (r32)pos1->abs_tile_z - (r32)pos2->abs_tile_z;  
+
+  result.dx = tile_map->tile_side_in_metres * dtile_x + (pos1->x_offset - pos2->x_offset);
+  result.dy = tile_map->tile_side_in_metres * dtile_y + (pos1->y_offset - pos2->y_offset);
+  result.dz = tile_map->tile_side_in_metres * dtile_z;
+
+  return result;
+}
+
+
 struct BitmapHeader
 {
   // TODO(Ryan): Will pack to largest size in struct?
@@ -372,32 +407,38 @@ struct BitmapHeader
 } __attribute__((packed));
 
 
+// TODO(Ryan): Why is this blurry for player bitmap?
 INTERNAL void
-draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y)
+draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y,
+         int align_x = 0, int align_y = 0)
 {
-  int min_x = roundf(x);
-  if (min_x < 0) min_x = 0;
-  int min_y = roundf(y);
-  if (min_y < 0) min_y = 0;
+  x -= (r32)align_x;
+  y -= (r32)align_y;
 
-  int blit_width = bitmap->width;
-  int blit_height = bitmap->height;
-  if (x + blit_width > back_buffer->width) blit_width = back_buffer->width;
-  if (y + blit_height > back_buffer->height) blit_height = back_buffer->height;
+  int min_x = (u32)roundf(x);
+  int max_x = (u32)roundf(x + bitmap->width);
+  int min_y = (u32)roundf(y);
+  int max_y = (u32)roundf(y + bitmap->height);
+
+  if (min_x < 0) min_x = 0;
+  if (max_x > back_buffer->width) max_x = back_buffer->width;
+  if (min_y < 0) min_y = 0;
+  if (max_y > back_buffer->height) max_y = back_buffer->height;
 
   // TODO(Ryan): Account for clipping here
-  u8 *bitmap_row = (u8 *)bitmap->pixels + ((bitmap->width * (bitmap->height - 1)) * 4);
-  u8 *buffer_row = back_buffer->memory;
-  for (int y = 0; y < blit_height; ++y)
+  u32 *bitmap_row = (u32 *)bitmap->pixels + (bitmap->width * (bitmap->height - 1));
+  u32 *buffer_row = (u32 *)back_buffer->memory + (back_buffer->width * min_y + min_x);
+  for (int y = min_y; y < max_y; ++y)
   {
-    u32 *buffer_cursor = (u32 *)buffer_row;
-    u32 *pixel_cursor = (u32 *)bitmap_row;
+    u32 *buffer_cursor = buffer_row;
+    u32 *pixel_cursor = bitmap_row;
 
-    for (int x = 0; x < blit_width; ++x)
+    for (int x = min_x; x < max_x; ++x)
     {
+      // TODO(Ryan): Gamma refers to monitor/graphics card further altering our values to increase their brightness?
       // NOTE(Ryan): 1. Alpha test has a cut-off threshold
       // 2. Alpha linear blend with background
-      r32 alpha_blend_t = (*pixel_cursor >> 24) / 255.0f;
+      r32 alpha_blend_t = (*pixel_cursor >> 24 & 0xFF) / 255.0f;
       
       r32 red_orig = (*buffer_cursor >> 16 & 0xFF);
       r32 new_red = (*pixel_cursor >> 16 & 0xFF);
@@ -412,13 +453,13 @@ draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y)
       r32 blue_blended = blue_orig + alpha_blend_t * (new_blue - blue_orig);
 
       pixel_cursor++;
-      *buffer_cursor++ = (u32)roundf(red_blended) << 16 | 
+      *buffer_cursor++ = 0xff << 24 | (u32)roundf(red_blended) << 16 | 
                          (u32)roundf(green_blended) << 8 | 
                          (u32)roundf(blue_blended) << 0; 
     }
 
-    buffer_row += (back_buffer->width * 4);
-    bitmap_row -= (bitmap->width * 4);
+    buffer_row += back_buffer->width;
+    bitmap_row -= bitmap->width;
   }
 }
 
@@ -480,11 +521,51 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   if (!memory->is_initialized)
   {
     state->backdrop = load_bmp(thread_context, platform->read_entire_file, "test/test_background.bmp");
-    state->player_head = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_head.bmp");
-    state->player_torso = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_cape.bmp");
-    state->player_legs = load_bmp(thread_context, platform->read_entire_file, "test/test_hero_front_torso.bmp");
+    // TODO(Ryan): Not ideal to have large tables of strings in your code
+    PlayerBitmap *player_bitmap = state->player_bitmaps;
+    player_bitmap->head = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_right_head.bmp");
+    player_bitmap->torso = load_bmp(thread_context, platform->read_entire_file,
+                                                    "test/test_hero_right_cape.bmp");
+    player_bitmap->legs = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_right_torso.bmp");
+    player_bitmap->align_x = 72;
+    player_bitmap->align_y = 182;
+    player_bitmap++;
 
-    state->player_pos.abs_tile_x = 3;
+    player_bitmap->head = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_back_head.bmp");
+    player_bitmap->torso = load_bmp(thread_context, platform->read_entire_file,
+                                                    "test/test_hero_back_cape.bmp");
+    player_bitmap->legs = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_back_torso.bmp");
+    player_bitmap->align_x = 72;
+    player_bitmap->align_y = 182;
+    player_bitmap++;
+
+    player_bitmap->head = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_left_head.bmp");
+    player_bitmap->torso = load_bmp(thread_context, platform->read_entire_file,
+                                                    "test/test_hero_left_cape.bmp");
+    player_bitmap->legs = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_left_torso.bmp");
+    player_bitmap->align_x = 72;
+    player_bitmap->align_y = 182;
+    player_bitmap++;
+
+    player_bitmap->head = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_front_head.bmp");
+    player_bitmap->torso = load_bmp(thread_context, platform->read_entire_file,
+                                                    "test/test_hero_front_cape.bmp");
+    player_bitmap->legs = load_bmp(thread_context, platform->read_entire_file, 
+                                                    "test/test_hero_front_torso.bmp");
+    player_bitmap->align_x = 72;
+    player_bitmap->align_y = 182;
+
+    state->camera_pos.abs_tile_x = 17 / 2;
+    state->camera_pos.abs_tile_y = 9 / 2; 
+
+    state->player_pos.abs_tile_x = 1;
     state->player_pos.abs_tile_y = 3;
     state->player_pos.x_offset = 5.0f;
     state->player_pos.y_offset = 5.0f;
@@ -498,11 +579,11 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     world->tile_map = MEMORY_RESERVE_STRUCT(&state->world_arena, TileMap);
     TileMap *tile_map = world->tile_map;
 
-    tile_map->chunk_shift = 8;
+    tile_map->chunk_shift = 4;
     tile_map->chunk_mask = (1U << tile_map->chunk_shift) - 1;
     tile_map->chunk_dim = (1U << tile_map->chunk_shift);
-    tile_map->num_tile_chunks_x = 4;
-    tile_map->num_tile_chunks_y = 4;
+    tile_map->num_tile_chunks_x = 128;
+    tile_map->num_tile_chunks_y = 128;
     tile_map->num_tile_chunks_z = 2;
     tile_map->tile_side_in_metres = 1.4f;
     // NOTE(Ryan): For basic sparseness we allocate chunk contents when we write to them
@@ -601,7 +682,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   r32 screen_centre_x = (r32)back_buffer->width * 0.5f;
   r32 screen_centre_y = (r32)back_buffer->height * 0.5f;
 
-  r32 tile_side_in_pixels = 75.0f;
+  r32 tile_side_in_pixels = 60.0f;
   r32 metres_to_pixels = (r32)tile_side_in_pixels / (r32)tile_map->tile_side_in_metres;
 
   r32 player_r = 0.5f;
@@ -628,10 +709,26 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         r32 dplayer_x = 0.0f; 
         r32 dplayer_y = 0.0f; 
 
-        if (controller.action_left.ended_down) dplayer_x = -1.0f;
-        if (controller.action_right.ended_down) dplayer_x = 1.0f;
-        if (controller.action_up.ended_down) dplayer_y = 1.0f;
-        if (controller.action_down.ended_down) dplayer_y = -1.0f;
+        if (controller.action_right.ended_down) 
+        {
+          state->player_facing_direction = 0;
+          dplayer_x = 1.0f;
+        }
+        if (controller.action_up.ended_down) 
+        {
+          state->player_facing_direction = 1;
+          dplayer_y = 1.0f; 
+        }
+        if (controller.action_left.ended_down) 
+        {
+          state->player_facing_direction = 2;
+          dplayer_x = -1.0f;
+        }
+        if (controller.action_down.ended_down) 
+        {
+          state->player_facing_direction = 3;
+          dplayer_y = -1.0f;
+        }
 
         r32 player_speed = 2.0f;
 
@@ -676,6 +773,20 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
           state->player_pos = test_player_pos;
         }
 
+        state->camera_pos.abs_tile_z = state->player_pos.abs_tile_z;
+
+        TileMapDifference diff = subtract(tile_map, &state->player_pos, &state->camera_pos);
+
+        // NOTE(Ryan): Screens are 17 / 9, so half screen widths
+        if (diff.dx > (9.0f * tile_map->tile_side_in_metres))
+        {
+          state->camera_pos.abs_tile_x++;
+        }
+        if (diff.dx < -(9.0f * tile_map->tile_side_in_metres))
+        {
+          state->camera_pos.abs_tile_x--;
+        }
+
       }
 
     }
@@ -689,9 +800,9 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   {
     for (int rel_x = -20; rel_x < 20; ++rel_x)
     {
-      u32 y = state->player_pos.abs_tile_y + rel_y;
-      u32 x = state->player_pos.abs_tile_x + rel_x;
-      u32 z = state->player_pos.abs_tile_z;
+      u32 y = state->camera_pos.abs_tile_y + rel_y;
+      u32 x = state->camera_pos.abs_tile_x + rel_x;
+      u32 z = state->camera_pos.abs_tile_z;
       u32 tile_id = get_tile_value(tile_map, x, y, z);
       // TODO(Ryan): 0 is not defined, 1 is walkable, 2 is wall
       if (tile_id > 1)
@@ -700,15 +811,15 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         if (tile_id == 2) whitescale = 1.0f;
         if (tile_id == 3 || tile_id == 4) whitescale = 0.25f;
 
-        if (x == state->player_pos.abs_tile_x && 
-              y == state->player_pos.abs_tile_y) whitescale = 0.0f;
+        if (x == state->camera_pos.abs_tile_x && 
+              y == state->camera_pos.abs_tile_y) whitescale = 0.0f;
 
         // IMPORTANT(Ryan): Smooth scrolling acheived by drawing the map around the player,
         // whilst keeping the player in the centre of the screen.
         // Therefore, incorporate the player offset in the tile drawing
-        r32 centre_x = screen_centre_x - (metres_to_pixels*state->player_pos.x_offset) +
+        r32 centre_x = screen_centre_x - (metres_to_pixels*state->camera_pos.x_offset) +
                         ((r32)rel_x * tile_side_in_pixels);
-        r32 centre_y = screen_centre_y + (metres_to_pixels*state->player_pos.y_offset) -
+        r32 centre_y = screen_centre_y + (metres_to_pixels*state->camera_pos.y_offset) -
                         ((r32)rel_y * tile_side_in_pixels);
         r32 min_x = centre_x - 0.5f * tile_side_in_pixels; 
         r32 min_y = centre_y - 0.5f * tile_side_in_pixels; 
@@ -720,12 +831,23 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
     }
   }
 
+  TileMapDifference diff = subtract(state->world->tile_map, &state->player_pos, &state->camera_pos);
+  // the screen centre is always where the camera is
+  r32 player_ground_point_x = screen_centre_x + (metres_to_pixels * diff.dx); 
+  r32 player_ground_point_y = screen_centre_y - (metres_to_pixels * diff.dy);
 
-  r32 player_min_x = screen_centre_x - (player_width * metres_to_pixels * 0.5f);
-  r32 player_min_y = screen_centre_y - (player_height * metres_to_pixels);
+  r32 player_min_x = player_ground_point_x - (player_width * metres_to_pixels * 0.5f);
+  r32 player_min_y = player_ground_point_y - (player_height * metres_to_pixels);
   draw_rect(back_buffer, player_min_x, player_min_y, 
             player_min_x + player_width*metres_to_pixels, 
             player_min_y + player_height*metres_to_pixels, player_r, player_g, player_b);
-  draw_bmp(back_buffer, &state->player_head, player_min_x, player_min_y); 
+  
+  PlayerBitmap *active_player_bitmap = &state->player_bitmaps[state->player_facing_direction];
+  draw_bmp(back_buffer, &active_player_bitmap->legs, player_ground_point_x, player_ground_point_y,
+           active_player_bitmap->align_x, active_player_bitmap->align_y); 
+  draw_bmp(back_buffer, &active_player_bitmap->torso, player_ground_point_x, player_ground_point_y,
+           active_player_bitmap->align_x, active_player_bitmap->align_y); 
+  draw_bmp(back_buffer, &active_player_bitmap->head, player_ground_point_x, player_ground_point_y,
+           active_player_bitmap->align_x, active_player_bitmap->align_y); 
 
 }
