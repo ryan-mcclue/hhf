@@ -28,6 +28,11 @@ common_linker_flags="-Wl,--gc-sections $libraries"
 
 # NOTE(Ryan): Debugger persists PID on program close instead of debugger close.
 # Assume PID in question has CPU usage greater than 10
+
+# TODO(Ryan): Create a lock.tmp file and check modification time instead of signals 
+# echo WAITING FOR SHARED OBJECT GENERATION > lock.tmp
+# g++ file.c -o file
+# rm -f lock.tmp
 ubuntu_hhf_pid=$(ps -ef | grep build/ubuntu-hhf | awk '$4 > 10 { print $2 }')
 test -z "$ubuntu_hhf_pid" && g++ $common_compiler_flags $dev_compiler_flags \
                            code/ubuntu-hhf.cpp -o build/ubuntu-hhf \

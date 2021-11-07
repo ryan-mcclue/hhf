@@ -420,13 +420,25 @@ draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y,
   int min_y = (u32)roundf(y);
   int max_y = (u32)roundf(y + bitmap->height);
 
-  if (min_x < 0) min_x = 0;
+  int offset_x = 0;
+  if (min_x < 0) 
+  {
+    offset_x = -min_x;
+    min_x = 0;
+  }
+  int offset_y = 0;
+  if (min_y < 0) 
+  {
+    offset_y = -min_y;
+    min_y = 0;
+  }
+
   if (max_x > back_buffer->width) max_x = back_buffer->width;
-  if (min_y < 0) min_y = 0;
   if (max_y > back_buffer->height) max_y = back_buffer->height;
 
   // TODO(Ryan): Account for clipping here
   u32 *bitmap_row = (u32 *)bitmap->pixels + (bitmap->width * (bitmap->height - 1));
+  bitmap_row += -(bitmap->width * offset_y) + offset_x;
   u32 *buffer_row = (u32 *)back_buffer->memory + (back_buffer->width * min_y + min_x);
   for (int y = min_y; y < max_y; ++y)
   {
@@ -452,10 +464,11 @@ draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y,
       r32 new_blue = (*pixel_cursor >> 0 & 0xFF);
       r32 blue_blended = blue_orig + alpha_blend_t * (new_blue - blue_orig);
 
-      pixel_cursor++;
-      *buffer_cursor++ = 0xff << 24 | (u32)roundf(red_blended) << 16 | 
+      *buffer_cursor = 0xff << 24 | (u32)roundf(red_blended) << 16 | 
                          (u32)roundf(green_blended) << 8 | 
                          (u32)roundf(blue_blended) << 0; 
+      pixel_cursor++;
+      buffer_cursor++;
     }
 
     buffer_row += back_buffer->width;
@@ -780,11 +793,19 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         // NOTE(Ryan): Screens are 17 / 9, so half screen widths
         if (diff.dx > (9.0f * tile_map->tile_side_in_metres))
         {
-          state->camera_pos.abs_tile_x++;
+          state->camera_pos.abs_tile_x += 17;
         }
         if (diff.dx < -(9.0f * tile_map->tile_side_in_metres))
         {
-          state->camera_pos.abs_tile_x--;
+          state->camera_pos.abs_tile_x -= 17;
+        }
+        if (diff.dy > (5.0f * tile_map->tile_side_in_metres))
+        {
+          state->camera_pos.abs_tile_y += 9;
+        }
+        if (diff.dy < -(5.0f * tile_map->tile_side_in_metres))
+        {
+          state->camera_pos.abs_tile_y -= 9;
         }
 
       }
