@@ -26,6 +26,7 @@
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
+#include <X11/Xcursor/Xcursor.h>
 #define _NET_WM_STATE_TOGGLE (2)
 
 #include <libudev.h>
@@ -237,7 +238,9 @@ xlib_back_buffer_update_render_pict(Display *display, XlibBackBuffer *back_buffe
                          back_buffer->render_pict.fmt, 0, 
                          &back_buffer->render_pict.attr);
 
-  // TODO(Ryan): Implement scaling ourselves
+  // TODO(Ryan): if (window_width >= 2 * buffer_width) scale = buffer_width * 2
+  // otherwise to black bar centering?
+  // TODO(Ryan): Implement scaling ourselves (resampling)
   // NOTE(Ryan): Could offset game display here
   double x_scale = back_buffer->width / (double)window_width;
   double y_scale = back_buffer->height / (double)window_height;
@@ -927,8 +930,11 @@ main(int argc, char *argv[])
   Window xlib_root_window = XDefaultRootWindow(xlib_display);
   int xlib_window_x0 = 0;
   int xlib_window_y0 = 0;
-  int xlib_window_x1 = 1280;
-  int xlib_window_y1 = 720;
+  //int xlib_window_x1 = 1280;
+  //int xlib_window_y1 = 720;
+  int xlib_window_x1 = 960;
+  int xlib_window_y1 = 540;
+
   int xlib_window_border_width = 0;
   unsigned long attribute_mask = CWEventMask | CWBackPixel | CWBitGravity;
   Window xlib_window = XCreateWindow(xlib_display, xlib_root_window,
@@ -946,9 +952,25 @@ main(int argc, char *argv[])
   XPresentQueryExtension(xlib_display, &xpresent_op, &event, &error);
   XPresentSelectInput(xlib_display, xlib_window, PresentCompleteNotifyMask);
 
+  // NOTE(Ryan): These are themed cursors with same name as default xlib cursors from:
+  // https://tronche.com/gui/x/xlib/appendix/b/, e.g. XC_sb_v_double_arrow
+  Cursor cur = XcursorLibraryLoadCursor(xlib_display, "sb_v_double_arrow");
+  XDefineCursor(xlib_display, xlib_window, cur);
+
+  // only hide on fullscreen
+  // XFixesHideCursor(xlib_display, xlib_root_window);
+  // XFixesShowCursor(xlib_display, xlib_root_window);
+
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
+  Atom xlib_netwm_bypass_compositor_atom = XInternAtom(xlib_display, 
+                                                       "_NET_WM_BYPASS_COMPOSITOR", False);
+  unsigned long value = 1;
+  XChangeProperty(xlib_display, xlib_window, xlib_netwm_bypass_compositor_atom, 
+                  XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&value, 1);
+
+  // TODO(Ryan): Consider changing refresh rate if detect going to slow?
   Atom xlib_netwm_state_atom = XInternAtom(xlib_display, "_NET_WM_STATE", False);
   Atom xlib_netwm_state_maxh_atom = \
     XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);
@@ -982,8 +1004,8 @@ main(int argc, char *argv[])
   // TODO(Ryan): For shipping, want 1920 x 1080 x 60Hz
   // For software, 1/8 so 960 x 540 x 30Hz
   // We want power of 2 textures for GPU
-  int xlib_back_buffer_width = 1280;
-  int xlib_back_buffer_height = 720;
+  int xlib_back_buffer_width = 960;
+  int xlib_back_buffer_height = 540;
   XlibBackBuffer xlib_back_buffer = \
     xlib_create_back_buffer(xlib_display, xlib_visual_info, xlib_window,
                             xlib_window_width, xlib_window_height,
@@ -1114,8 +1136,6 @@ main(int argc, char *argv[])
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
 
-  // only hide on fullscreen
-  // XFixesHideCursor(xlib_display, xlib_root_window);
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 

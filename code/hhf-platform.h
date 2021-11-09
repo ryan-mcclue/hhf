@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+// NOTE(Ryan): Put things in here that permeate into both the platform independent and
+// dependent code, e.g. HHF_INTERNAL, COMPILER_GCC, etc.
+
+// IMPORTANT(Ryan): These are essential for searchability when it comes to multithreading
+// Also for hotloading as clobbering will occur in data segment
 #define INTERNAL static
 #define GLOBAL static
 #define LOCAL_PERSIST static
@@ -126,9 +131,10 @@ typedef struct HHFPlatformReadFileResult
   int errno_code;
 } HHFPlatformReadFileResult;
 
+typedef HHFPlatformReadFileResult (*hhf_read_entire_file)(HHFThreadContext *thread, char *file_name);
 typedef struct HHFPlatform
 {
-  HHFPlatformReadFileResult (*read_entire_file)(HHFThreadContext *thread, char *file_name);
+  hhf_read_entire_file read_entire_file;
   void (*free_read_file_result)(HHFThreadContext *thread, HHFPlatformReadFileResult *read_result);
   int (*write_entire_file)(HHFThreadContext *thread, char *filename, void *memory, u64 size);
 } HHFPlatform;
