@@ -16,7 +16,7 @@ dev_compiler_flags="-O0 -g -ggdb3 -DHHF_SLOW -DHHF_INTERNAL"
 
 # IMPORTANT(Ryan): Xpresent is not present on fresh installs of Ubuntu.  
 # Work towards utilising GL (will also not have to do jit rendering)
-libraries="-lX11 -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
+libraries="-lX11 -lXcursor -lXrender -lXrandr -lXfixes -lXpresent -ludev -lpulse-simple -lpulse -ldl"
 common_linker_flags="-Wl,--gc-sections $libraries"
 
 # IMPORTANT(Ryan): glibc forwards-compatibility creates headaches

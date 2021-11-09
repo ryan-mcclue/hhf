@@ -407,7 +407,6 @@ struct BitmapHeader
 } __attribute__((packed));
 
 
-// TODO(Ryan): Why is this blurry for player bitmap?
 INTERNAL void
 draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y,
          int align_x = 0, int align_y = 0)
@@ -436,7 +435,6 @@ draw_bmp(HHFBackBuffer *back_buffer, LoadedBitmap *bitmap, r32 x, r32 y,
   if (max_x > back_buffer->width) max_x = back_buffer->width;
   if (max_y > back_buffer->height) max_y = back_buffer->height;
 
-  // TODO(Ryan): Account for clipping here
   u32 *bitmap_row = (u32 *)bitmap->pixels + (bitmap->width * (bitmap->height - 1));
   bitmap_row += -(bitmap->width * offset_y) + offset_x;
   u32 *buffer_row = (u32 *)back_buffer->memory + (back_buffer->width * min_y + min_x);

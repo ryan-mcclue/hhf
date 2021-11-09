@@ -26,6 +26,7 @@
 #include <X11/extensions/Xrandr.h>
 #include <X11/extensions/Xpresent.h>
 #include <X11/extensions/Xfixes.h>
+#include <X11/Xcursor/Xcursor.h>
 #define _NET_WM_STATE_TOGGLE (2)
 
 #include <libudev.h>
@@ -927,8 +928,11 @@ main(int argc, char *argv[])
   Window xlib_root_window = XDefaultRootWindow(xlib_display);
   int xlib_window_x0 = 0;
   int xlib_window_y0 = 0;
-  int xlib_window_x1 = 1280;
-  int xlib_window_y1 = 720;
+  //int xlib_window_x1 = 1280;
+  //int xlib_window_y1 = 720;
+  int xlib_window_x1 = 960;
+  int xlib_window_y1 = 540;
+
   int xlib_window_border_width = 0;
   unsigned long attribute_mask = CWEventMask | CWBackPixel | CWBitGravity;
   Window xlib_window = XCreateWindow(xlib_display, xlib_root_window,
@@ -946,8 +950,31 @@ main(int argc, char *argv[])
   XPresentQueryExtension(xlib_display, &xpresent_op, &event, &error);
   XPresentSelectInput(xlib_display, xlib_window, PresentCompleteNotifyMask);
 
+  // NOTE(Ryan): These are themed cursors with same name as default xlib cursors from:
+  // https://tronche.com/gui/x/xlib/appendix/b/, e.g. XC_sb_v_double_arrow
+  Cursor cur = XcursorLibraryLoadCursor(xlib_display, "sb_v_double_arrow");
+  XDefineCursor(xlib_display, xlib_window, cur);
+
+  // only hide on fullscreen
+  // XFixesHideCursor(xlib_display, xlib_root_window);
+  // XFixesShowCursor(xlib_display, xlib_root_window);
+
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
+
+  // TODO(Ryan): Investigate what a compositor is and how it fits into X11 architecture.
+  // Also see if we would benefit from this property.
+  //unsigned long value = 1;
+  //XChangeProperty(
+  //  x11.display,
+  //  x11.window,
+  //  x11atoms._NET_WM_BYPASS_COMPOSITOR,
+  //  XA_CARDINAL,
+  //  32,
+  //  PropModeReplace,
+  //  (unsigned char *)&value,
+  //  1
+  //);
 
   Atom xlib_netwm_state_atom = XInternAtom(xlib_display, "_NET_WM_STATE", False);
   Atom xlib_netwm_state_maxh_atom = \
@@ -1114,8 +1141,6 @@ main(int argc, char *argv[])
   void *update_and_render_lib = NULL;
   hhf_update_and_render_t update_and_render = NULL;
 
-  // only hide on fullscreen
-  // XFixesHideCursor(xlib_display, xlib_root_window);
 
   xrender_xpresent_back_buffer(xlib_display, xlib_window, xlib_gc,
                                xrandr_active_crtc.crtc, &xlib_back_buffer, 

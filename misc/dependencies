@@ -4,7 +4,7 @@
 glibc_debugging="libc6-dbg glibc-source"
 # udevamd --query=all -n input/event10
 device_debugging="evtest udevadm fftest"
-# NOTE(Ryan): Principally xrandr cmd-line tool, xdpyinfo
+# NOTE(Ryan): Principally xrandr, xdpyinfo, xwininfo
 x11_debugging="x11-xserver-utils"
 # NOTE(Ryan): Principally aplay cmd-line tool
 alsa_debugging="alsa-utils"
@@ -12,7 +12,7 @@ alsa_debugging="alsa-utils"
 # Inside of VM: $(mount -t 9p -o trans=virtio /virt-targetpoint-folder /actual-folder)
 system_debugging="virt-manager qemu-kvm htop"
 
-essential="libx11-dev libxrender-dev libxrandr-dev libxpresent-dev libudev-dev libpulse-dev"
+essential="libx11-dev libxcursor-dev libxrender-dev libxrandr-dev libxpresent-dev libudev-dev libpulse-dev"
 
 sudo apt install $essential
 

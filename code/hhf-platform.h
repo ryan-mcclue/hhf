@@ -3,6 +3,11 @@
 
 #include <stdint.h>
 
+// NOTE(Ryan): Put things in here that permeate into both the platform independent and
+// dependent code, e.g. HHF_INTERNAL, COMPILER_GCC, etc.
+
+// IMPORTANT(Ryan): These are essential for searchability when it comes to multithreading
+// Also for hotloading as clobbering will occur in data segment
 #define INTERNAL static
 #define GLOBAL static
 #define LOCAL_PERSIST static
