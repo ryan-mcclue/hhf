@@ -238,6 +238,8 @@ xlib_back_buffer_update_render_pict(Display *display, XlibBackBuffer *back_buffe
                          back_buffer->render_pict.fmt, 0, 
                          &back_buffer->render_pict.attr);
 
+  // TODO(Ryan): if (window_width >= 2 * buffer_width) scale = buffer_width * 2
+  // otherwise to black bar centering?
   // TODO(Ryan): Implement scaling ourselves (resampling)
   // NOTE(Ryan): Could offset game display here
   double x_scale = back_buffer->width / (double)window_width;
@@ -962,20 +964,13 @@ main(int argc, char *argv[])
   XMapWindow(xlib_display, xlib_window); 
   XFlush(xlib_display);
 
-  // TODO(Ryan): Investigate what a compositor is and how it fits into X11 architecture.
-  // Also see if we would benefit from this property.
-  //unsigned long value = 1;
-  //XChangeProperty(
-  //  x11.display,
-  //  x11.window,
-  //  x11atoms._NET_WM_BYPASS_COMPOSITOR,
-  //  XA_CARDINAL,
-  //  32,
-  //  PropModeReplace,
-  //  (unsigned char *)&value,
-  //  1
-  //);
+  Atom xlib_netwm_bypass_compositor_atom = XInternAtom(xlib_display, 
+                                                       "_NET_WM_BYPASS_COMPOSITOR", False);
+  unsigned long value = 1;
+  XChangeProperty(xlib_display, xlib_window, xlib_netwm_bypass_compositor_atom, 
+                  XA_CARDINAL, 32, PropModeReplace, (unsigned char *)&value, 1);
 
+  // TODO(Ryan): Consider changing refresh rate if detect going to slow?
   Atom xlib_netwm_state_atom = XInternAtom(xlib_display, "_NET_WM_STATE", False);
   Atom xlib_netwm_state_maxh_atom = \
     XInternAtom(xlib_display, "_NET_WM_STATE_MAXIMIZED_HORZ", False);

@@ -531,6 +531,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
   State *state = (State *)memory->permanent;
   if (!memory->is_initialized)
   {
+    // IMPORTANT(Ryan): Working with artists, only specify that certain things need to be in different layers
     state->backdrop = load_bmp(thread_context, platform->read_entire_file, "test/test_background.bmp");
     // TODO(Ryan): Not ideal to have large tables of strings in your code
     PlayerBitmap *player_bitmap = state->player_bitmaps;
