@@ -4,7 +4,6 @@
 // IMPORTANT(Ryan): There can become a proliferation of constructors as once you define one,
 // C++ forces you to use it, e.g. now I have to define a null constructor, etc.
 // In reality, {} syntax gives all I need without having to type more
-
 union V2
 {
   __extension__ struct 
@@ -88,3 +87,6 @@ V2 operator-=(V2 &a, const V2 &b)
 
   return a;
 }
+
+#define SQUARE(val) \
+  ((val) * (val))

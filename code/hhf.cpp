@@ -115,8 +115,10 @@ struct State
   PlayerBitmap player_bitmaps[4];
   int player_facing_direction;
 
-  TileMapPosition player_pos;
   TileMapPosition camera_pos;
+
+  TileMapPosition player_pos;
+  V2 dplayer_pos;
 };
 
 #if 0
@@ -719,43 +721,61 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       else
       {
         // digital tuning
-        V2 dplayer = {};
+        V2 ddplayer = {};
+
+        // NOTE(Ryan): Implementing rigid body dynamics, i.e. not concerned with deformations
+        // linear and angular
 
         if (controller.action_right.ended_down) 
         {
           state->player_facing_direction = 0;
-          dplayer.x = 1.0f;
+          ddplayer.x = 1.0f;
         }
         if (controller.action_up.ended_down) 
         {
           state->player_facing_direction = 1;
-          dplayer.y = 1.0f; 
+          ddplayer.y = 1.0f; 
         }
         if (controller.action_left.ended_down) 
         {
           state->player_facing_direction = 2;
-          dplayer.x = -1.0f;
+          ddplayer.x = -1.0f;
         }
         if (controller.action_down.ended_down) 
         {
           state->player_facing_direction = 3;
-          dplayer.y = -1.0f;
+          ddplayer.y = -1.0f;
         }
-
-        r32 player_speed = 2.0f;
-
-        if (controller.move_down.ended_down) player_speed = 10.0f;
-
-        dplayer *= player_speed;
 
         // hadamard product rarely used (perhaps in colours)
-        if (dplayer.x != 0.0f && dplayer.y != 0.0f)
+        if (ddplayer.x != 0.0f && ddplayer.y != 0.0f)
         {
-          dplayer *= 0.7071067811865476f;
+          ddplayer *= 0.7071067811865476f;
         }
 
+        // every frame we have the same acceleration
+        // however, the coefficients for the various integrations are different
+        // therefore the player movement is a piecewise function (rather than continuous)
+
+        // m/s^2
+        r32 player_speed = 10.0f; 
+        // by multiplying by time step, we cancel out seconds and get metres
+        // in effect, we are integrating
+
+        if (controller.move_down.ended_down) player_speed = 30.0f;
+
+        ddplayer *= player_speed;
+        // NOTE(Ryan): Here we tune by altering acceleration and friction with looped editing
+        ddplayer += -1.5f * state->dplayer_pos;
+
         TileMapPosition test_player_pos = state->player_pos;
-        test_player_pos.offset += (input->frame_dt * dplayer);
+        // IMPORTANT(Ryan): Always start with real-world equations and then modify to your needs   
+        test_player_pos.offset = (0.5f * ddplayer * SQUARE(input->frame_dt) +
+                                    state->dplayer_pos * input->frame_dt + 
+                                    test_player_pos.offset);
+        state->dplayer_pos = ddplayer * input->frame_dt + state->dplayer_pos;  
+        
+
         recanonicalise_position(tile_map, &test_player_pos);
 
         TileMapPosition player_left_pos = test_player_pos;
