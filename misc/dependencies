@@ -34,3 +34,19 @@ sudo sh -c 'echo kernel.kptr_restrict=0 >> /etc/sysctl.d/local.conf'
 # default-fragments = 4
 # default-fragment-size-msec = 25
 # systemctl --user restart pulseaudio.service
+
+# NOTE(Ryan): Mathematical topics
+# dimensional analysis
+# euclidean geometry (orthogonal axes)
+# trigonometry (angle between points)
+# calculus (acceleration <--> velocity <--> position)
+# linear algebra (matrices and vectors -> transformations and simultaneous equations)
+# partial differential equations (multi-variable calculus)
+# ordinary differential equations (e.g. scaled scrolling whereby the distance scrolled is proportional to the derivative of the distance?)
+# non-euclidean (3d rotations)
+# minkowski algebra (algebra with shapes: collision detection)
+# control theory (variable adjusted over time)
+# interval arithmetic (area computation)
+# graph theory (pathfinding)
+# operations research (minimising/maximising some quantity -> optimisation -> metropolis algorithm)
+# probability/statistics

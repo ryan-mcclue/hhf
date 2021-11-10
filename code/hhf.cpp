@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: zlib-acknowledgement
 
 #include "hhf.h"
+#include "hhf-math.h"
 
 #include <time.h>
 
 struct TileMapDifference
 {
-  r32 dx;
-  r32 dy;
+  V2 dxy;
   r32 dz;
 };
 
@@ -55,7 +55,7 @@ struct TileMapPosition
 // IMPORTANT(Ryan): We want at least 8bits for sub-pixel positioning to perform anti-aliasing
 // Therefore, only using r32 does not have enough data in mantissa for a large world
   // relative to tile
-  r32 x_offset, y_offset;
+  V2 offset;
 };
 
 struct MemoryArena
@@ -172,13 +172,13 @@ output_sound(HHFSoundBuffer *sound_buffer, HHFState *state)
 // What is sub-pixel? It makes movement smoother
 // NOTE(Ryan): We use floats for speed, ease in operations (blending), flexibility (normalisation)
 INTERNAL void
-draw_rect(HHFBackBuffer *back_buffer, r32 x0, r32 y0, r32 x1, r32 y1, r32 r, r32 g, r32 b)
+draw_rect(HHFBackBuffer *back_buffer, V2 min, V2 max, r32 r, r32 g, r32 b)
 {
   // NOTE(Ryan): Coordinates [x0, x1)
-  int min_x = roundf(x0); // _mm_cvtss_si32(_mm_set_ss(x0));
-  int min_y = roundf(y0);
-  int max_x = roundf(x1);
-  int max_y = roundf(y1);
+  int min_x = roundf(min.x); // _mm_cvtss_si32(_mm_set_ss(x0));
+  int min_y = roundf(min.y);
+  int max_x = roundf(max.x);
+  int max_y = roundf(max.y);
 
   if (min_x < 0) min_x = 0;
   if (min_x >= back_buffer->width) min_x = back_buffer->width;
@@ -237,8 +237,8 @@ recanonicalise_coord(TileMap *tile_map, u32 *tile_coord, r32 *tile_rel)
 INTERNAL void
 recanonicalise_position(TileMap *tile_map, TileMapPosition *pos)
 {
-  recanonicalise_coord(tile_map, &pos->abs_tile_x, &pos->x_offset);
-  recanonicalise_coord(tile_map, &pos->abs_tile_y, &pos->y_offset);
+  recanonicalise_coord(tile_map, &pos->abs_tile_x, &pos->offset.x);
+  recanonicalise_coord(tile_map, &pos->abs_tile_y, &pos->offset.y);
 }
 
 INTERNAL TileChunkPosition
@@ -370,12 +370,13 @@ subtract(TileMap *tile_map, TileMapPosition *pos1, TileMapPosition *pos2)
 
   // IMPORTANT(Ryan): Best to use explicit casts when working with floating point to handle
   // cases where working with unsigned may wrap around
-  r32 dtile_x = (r32)pos1->abs_tile_x - (r32)pos2->abs_tile_x;  
-  r32 dtile_y = (r32)pos1->abs_tile_y - (r32)pos2->abs_tile_y;  
-  r32 dtile_z = (r32)pos1->abs_tile_z - (r32)pos2->abs_tile_z;  
+  V2 dtile_xy = {
+    (r32)pos1->abs_tile_x - (r32)pos2->abs_tile_x,
+    (r32)pos1->abs_tile_y - (r32)pos2->abs_tile_y,
+  };
+  r32 dtile_z = (r32)pos1->abs_tile_z - (r32)pos2->abs_tile_z;
 
-  result.dx = tile_map->tile_side_in_metres * dtile_x + (pos1->x_offset - pos2->x_offset);
-  result.dy = tile_map->tile_side_in_metres * dtile_y + (pos1->y_offset - pos2->y_offset);
+  result.dxy = tile_map->tile_side_in_metres * dtile_xy + (pos1->offset - pos2->offset);
   result.dz = tile_map->tile_side_in_metres * dtile_z;
 
   return result;
@@ -579,8 +580,8 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
 
     state->player_pos.abs_tile_x = 1;
     state->player_pos.abs_tile_y = 3;
-    state->player_pos.x_offset = 5.0f;
-    state->player_pos.y_offset = 5.0f;
+    state->player_pos.offset.x = 5.0f;
+    state->player_pos.offset.y = 5.0f;
 
     initialise_memory_arena(&state->world_arena, memory->permanent_size - sizeof(State),
                              (u8 *)memory->permanent + sizeof(State));
@@ -718,48 +719,51 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       else
       {
         // digital tuning
-        r32 dplayer_x = 0.0f; 
-        r32 dplayer_y = 0.0f; 
+        V2 dplayer = {};
 
         if (controller.action_right.ended_down) 
         {
           state->player_facing_direction = 0;
-          dplayer_x = 1.0f;
+          dplayer.x = 1.0f;
         }
         if (controller.action_up.ended_down) 
         {
           state->player_facing_direction = 1;
-          dplayer_y = 1.0f; 
+          dplayer.y = 1.0f; 
         }
         if (controller.action_left.ended_down) 
         {
           state->player_facing_direction = 2;
-          dplayer_x = -1.0f;
+          dplayer.x = -1.0f;
         }
         if (controller.action_down.ended_down) 
         {
           state->player_facing_direction = 3;
-          dplayer_y = -1.0f;
+          dplayer.y = -1.0f;
         }
 
         r32 player_speed = 2.0f;
 
         if (controller.move_down.ended_down) player_speed = 10.0f;
 
-        dplayer_x *= player_speed;
-        dplayer_y *= player_speed;
+        dplayer *= player_speed;
+
+        // hadamard product rarely used (perhaps in colours)
+        if (dplayer.x != 0.0f && dplayer.y != 0.0f)
+        {
+          dplayer *= 0.7071067811865476f;
+        }
 
         TileMapPosition test_player_pos = state->player_pos;
-        test_player_pos.x_offset += (dplayer_x * input->frame_dt);
-        test_player_pos.y_offset += (dplayer_y * input->frame_dt); 
+        test_player_pos.offset += (input->frame_dt * dplayer);
         recanonicalise_position(tile_map, &test_player_pos);
 
         TileMapPosition player_left_pos = test_player_pos;
-        player_left_pos.x_offset -= (0.5f * player_width);
+        player_left_pos.offset.x -= (0.5f * player_width);
         recanonicalise_position(tile_map, &player_left_pos);
 
         TileMapPosition player_right_pos = test_player_pos;
-        player_right_pos.x_offset += (0.5f * player_width);
+        player_right_pos.offset.y += (0.5f * player_width);
         recanonicalise_position(tile_map, &player_right_pos);
 
         // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
@@ -790,19 +794,19 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         TileMapDifference diff = subtract(tile_map, &state->player_pos, &state->camera_pos);
 
         // NOTE(Ryan): Screens are 17 / 9, so half screen widths
-        if (diff.dx > (9.0f * tile_map->tile_side_in_metres))
+        if (diff.dxy.x > (9.0f * tile_map->tile_side_in_metres))
         {
           state->camera_pos.abs_tile_x += 17;
         }
-        if (diff.dx < -(9.0f * tile_map->tile_side_in_metres))
+        if (diff.dxy.x < -(9.0f * tile_map->tile_side_in_metres))
         {
           state->camera_pos.abs_tile_x -= 17;
         }
-        if (diff.dy > (5.0f * tile_map->tile_side_in_metres))
+        if (diff.dxy.y > (5.0f * tile_map->tile_side_in_metres))
         {
           state->camera_pos.abs_tile_y += 9;
         }
-        if (diff.dy < -(5.0f * tile_map->tile_side_in_metres))
+        if (diff.dxy.y < -(5.0f * tile_map->tile_side_in_metres))
         {
           state->camera_pos.abs_tile_y -= 9;
         }
@@ -837,30 +841,32 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         // IMPORTANT(Ryan): Smooth scrolling acheived by drawing the map around the player,
         // whilst keeping the player in the centre of the screen.
         // Therefore, incorporate the player offset in the tile drawing
-        r32 centre_x = screen_centre_x - (metres_to_pixels*state->camera_pos.x_offset) +
-                        ((r32)rel_x * tile_side_in_pixels);
-        r32 centre_y = screen_centre_y + (metres_to_pixels*state->camera_pos.y_offset) -
-                        ((r32)rel_y * tile_side_in_pixels);
-        r32 min_x = centre_x - 0.5f * tile_side_in_pixels; 
-        r32 min_y = centre_y - 0.5f * tile_side_in_pixels; 
-        r32 max_x = centre_x + 0.5f * tile_side_in_pixels;
-        r32 max_y = centre_y + 0.5f * tile_side_in_pixels;
+        V2 centre = {screen_centre_x - (metres_to_pixels*state->camera_pos.offset.x) +
+                        ((r32)rel_x * tile_side_in_pixels),
+                    screen_centre_y + (metres_to_pixels*state->camera_pos.offset.y) -
+                        ((r32)rel_y * tile_side_in_pixels)};
 
-        draw_rect(back_buffer, min_x, min_y, max_x, max_y, whitescale, whitescale, whitescale);
+        V2 tile_side = {0.5f * tile_side_in_pixels, 0.5f * tile_side_in_pixels};
+        V2 min = centre - tile_side;
+        V2 max = centre + tile_side;
+
+        draw_rect(back_buffer, min, max, whitescale, whitescale, whitescale);
       }
     }
   }
 
   TileMapDifference diff = subtract(state->world->tile_map, &state->player_pos, &state->camera_pos);
   // the screen centre is always where the camera is
-  r32 player_ground_point_x = screen_centre_x + (metres_to_pixels * diff.dx); 
-  r32 player_ground_point_y = screen_centre_y - (metres_to_pixels * diff.dy);
+  r32 player_ground_point_x = screen_centre_x + (metres_to_pixels * diff.dxy.x); 
+  r32 player_ground_point_y = screen_centre_y - (metres_to_pixels * diff.dxy.y);
 
-  r32 player_min_x = player_ground_point_x - (player_width * metres_to_pixels * 0.5f);
-  r32 player_min_y = player_ground_point_y - (player_height * metres_to_pixels);
-  draw_rect(back_buffer, player_min_x, player_min_y, 
-            player_min_x + player_width*metres_to_pixels, 
-            player_min_y + player_height*metres_to_pixels, player_r, player_g, player_b);
+  V2 player_left_top = {player_ground_point_x - (player_width * metres_to_pixels * 0.5f),
+                        player_ground_point_y - (player_height * metres_to_pixels)};
+  V2 player_width_height = {player_width, player_height};
+
+  draw_rect(back_buffer, player_left_top, 
+            player_left_top + metres_to_pixels * player_width_height, 
+            player_r, player_g, player_b);
   
   PlayerBitmap *active_player_bitmap = &state->player_bitmaps[state->player_facing_direction];
   draw_bmp(back_buffer, &active_player_bitmap->legs, player_ground_point_x, player_ground_point_y,
