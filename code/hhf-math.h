@@ -88,5 +88,15 @@ V2 operator-=(V2 &a, const V2 &b)
   return a;
 }
 
+INTERNAL r32
+inner(V2 a, V2 b)
+{
+  r32 result = 0.0f;
+
+  result = (a.x * b.x) + (a.y * b.y);
+
+  return result;
+}
+
 #define SQUARE(val) \
   ((val) * (val))

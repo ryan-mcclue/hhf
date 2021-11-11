@@ -348,6 +348,7 @@ struct XrandrActiveCRTC
   int refresh_rate;
 };
 
+// NOTE(Ryan): xrandr can be used to set brightness also
 INTERNAL XrandrActiveCRTC
 xrandr_get_active_crtc(Display *display, Window root_window)
 {

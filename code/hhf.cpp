@@ -721,6 +721,7 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
       else
       {
         // digital tuning
+
         V2 ddplayer = {};
 
         // NOTE(Ryan): Implementing rigid body dynamics, i.e. not concerned with deformations
@@ -746,6 +747,13 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
           state->player_facing_direction = 3;
           ddplayer.y = -1.0f;
         }
+        // cosθ is x coord (think of unit circle)
+        // h·cosθ is length of vertical rhs triangle
+
+        // dot product is projecting a vector onto another
+        // so, if dot product with unit vector, get what its coordinates are in that space
+
+        // drawing lines to remember matrix multiplication
 
         // hadamard product rarely used (perhaps in colours)
         if (ddplayer.x != 0.0f && ddplayer.y != 0.0f)
@@ -786,12 +794,52 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
         player_right_pos.offset.y += (0.5f * player_width);
         recanonicalise_position(tile_map, &player_right_pos);
 
-        // TODO(Ryan): Fix stopping before walls and possibly going through thin walls
-        bool tile_is_valid = is_tile_map_point_empty(tile_map, &test_player_pos) &&
-          is_tile_map_point_empty(tile_map, &player_left_pos) && 
-          is_tile_map_point_empty(tile_map, &player_right_pos);
+        bool collided = false;
+        TileMapPosition collided_pos = {};
 
-        if (tile_is_valid) 
+        if (!is_tile_map_point_empty(tile_map, &test_player_pos))
+        {
+          collided = true;
+          collided_pos = test_player_pos;
+        }
+        if (!is_tile_map_point_empty(tile_map, &player_left_pos))
+        {
+          collided = true;
+          collided_pos = player_left_pos;
+        }
+        if (!is_tile_map_point_empty(tile_map, &player_right_pos))
+        {
+          collided = true;
+          collided_pos = player_right_pos;
+        }
+
+        if (collided) 
+        {
+          // IMPORTANT(Ryan): Our vector is orientated a (0, 0)
+          // wall normal
+          V2 r = {}; 
+
+          if (collided_pos.abs_tile_x < state->player_pos.abs_tile_x)
+          {
+            r = {1, 0};
+          }
+          if (collided_pos.abs_tile_x > state->player_pos.abs_tile_x)
+          {
+            r = {-1, 0};
+          }
+          if (collided_pos.abs_tile_y < state->player_pos.abs_tile_y)
+          {
+            r = {0, 1};
+          }
+          if (collided_pos.abs_tile_y > state->player_pos.abs_tile_y)
+          {
+            r = {0, -1};
+          }
+
+          // subtracting one will cause sticking to the wall
+          state->dplayer_pos = state->dplayer_pos - 2 * inner(state->dplayer_pos, r) * r; 
+        }
+        else
         {
           if (!are_on_same_tile(&state->player_pos, &test_player_pos))
           {
