@@ -747,11 +747,14 @@ hhf_update_and_render(HHFThreadContext *thread_context, HHFBackBuffer *back_buff
           state->player_facing_direction = 3;
           ddplayer.y = -1.0f;
         }
-        // cosθ is x coord (think of unit circle)
-        // h·cosθ is length of vertical rhs triangle
+        // cosθ is x coord in unit circle
+        // h·cosθ is length of horizontal rhs triangle
+        // dot product: |v|·|wₚ|. IMPORTANT: projected onto line through origin of vector, so will be negative if opposite direction
+        // So, with a unit vector we get the length of the vector projected onto it.
+        // therefore, dot product on two orthogonal unit vectors allows us to remap any
+        // vector to a new coordinate space
 
-        // dot product is projecting a vector onto another
-        // so, if dot product with unit vector, get what its coordinates are in that space
+        // |v|·|w|·cosθ
 
         // drawing lines to remember matrix multiplication
 
